@@ -4,7 +4,6 @@ import {
   listDepartments,
   listJobTitles,
   listCampaignStatuses,
-  listPayoutModels,
 } from "@/modules/org/queries";
 import { listStores } from "@/modules/stores/queries";
 import { CampaignForm } from "@/modules/campaigns/components/campaign-form";
@@ -12,14 +11,13 @@ import { EMPTY_CAMPAIGN } from "@/modules/campaigns/types";
 
 export default async function NewCampaignPage() {
   await requireAccess("campaigns");
-  const [executionTypes, departments, jobTitles, stores, statuses, payoutModels] =
+  const [executionTypes, departments, jobTitles, stores, statuses] =
     await Promise.all([
       listExecutionTypes(),
       listDepartments(),
       listJobTitles(),
       listStores(),
       listCampaignStatuses(),
-      listPayoutModels(),
     ]);
 
   return (
@@ -31,7 +29,6 @@ export default async function NewCampaignPage() {
       jobTitles={jobTitles}
       stores={stores.map((s) => ({ id: s.id, label: `${s.code} — ${s.name}` }))}
       statuses={statuses}
-      payoutModels={payoutModels}
     />
   );
 }

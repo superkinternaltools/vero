@@ -1,36 +1,46 @@
 import { createClient } from "@/core/db/server";
+import type { PayoutTier } from "@/modules/campaigns/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export type CellData = {
   status: string;
   photos: string[];
   submissionId: string | null;
+  submittedByName: string | null;
   aiScore: number | null;
+  aiVerdict: string | null;
+  humanVerdict: string | null;
   rejectionReason: string | null;
+  geofenceFlag: boolean;
+  duplicateFlag: boolean;
+  geofenceDistanceM: number | null;
+  payoutTierLabel: string | null;
 };
 
 export type Matrix = {
   campaignName: string;
+  payoutModel: string;
+  payoutTiers: PayoutTier[];
   stores: { id: string; name: string }[];
   cycles: string[];
   cells: Record<string, Record<string, CellData>>;
 };
 
-export async function listCampaignOptions(): Promise<{ id: string; name: string }[]> {
+export async function listCampaignOptions(): Promise<{ id: string; name: string; status: string }[]> {
   const supabase = await createClient();
   const { data } = await supabase
     .from("campaigns")
-    .select("id, name")
+    .select("id, name, status")
     .is("deleted_at", null)
     .order("created_at", { ascending: false });
-  return (data as { id: string; name: string }[]) ?? [];
+  return (data as { id: string; name: string; status: string }[]) ?? [];
 }
 
 export async function getCampaignMatrix(id: string): Promise<Matrix | null> {
   const supabase = await createClient();
   const { data: campaign } = await supabase
     .from("campaigns")
-    .select("name")
+    .select("name, payout_model, payout_tiers")
     .eq("id", id)
     .maybeSingle();
   if (!campaign) return null;
@@ -41,7 +51,7 @@ export async function getCampaignMatrix(id: string): Promise<Matrix | null> {
       `
       id, store_id, due_date, status,
       stores ( name ),
-      submissions ( id, photos, ai_score, rejection_reason, created_at )
+      submissions ( id, photos, ai_score, ai_verdict, human_verdict, rejection_reason, geofence_flag, duplicate_flag, geofence_distance_m, payout_tier_label, created_at, submitted_by, profiles ( display_name ) )
       `,
     )
     .eq("campaign_id", id)
@@ -63,8 +73,15 @@ export async function getCampaignMatrix(id: string): Promise<Matrix | null> {
       status: t.status,
       photos: latest?.photos ?? [],
       submissionId: latest?.id ?? null,
+      submittedByName: latest?.profiles?.display_name ?? null,
       aiScore: latest?.ai_score ?? null,
+      aiVerdict: latest?.ai_verdict ?? null,
+      humanVerdict: latest?.human_verdict ?? null,
       rejectionReason: latest?.rejection_reason ?? null,
+      geofenceFlag: latest?.geofence_flag ?? false,
+      duplicateFlag: latest?.duplicate_flag ?? false,
+      geofenceDistanceM: latest?.geofence_distance_m ?? null,
+      payoutTierLabel: latest?.payout_tier_label ?? null,
     };
   }
 
@@ -73,5 +90,13 @@ export async function getCampaignMatrix(id: string): Promise<Matrix | null> {
     .sort((a, b) => a.name.localeCompare(b.name));
   const cycles = [...cycleSet].sort();
 
-  return { campaignName: campaign.name, stores, cycles, cells };
+  const c = campaign as any;
+  return {
+    campaignName: c.name,
+    payoutModel: c.payout_model ?? "binary",
+    payoutTiers: c.payout_tiers ?? [],
+    stores,
+    cycles,
+    cells,
+  };
 }

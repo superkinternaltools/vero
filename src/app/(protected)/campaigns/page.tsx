@@ -1,8 +1,8 @@
 import Link from "next/link";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2, Copy } from "lucide-react";
 import { requireAccess } from "@/core/auth/access";
 import { listCampaigns } from "@/modules/campaigns/queries";
-import { deleteCampaign } from "@/modules/campaigns/actions";
+import { deleteCampaign, duplicateCampaign } from "@/modules/campaigns/actions";
 import { Button } from "@/core/ui/button";
 import { GenerateTasksButton } from "@/modules/campaigns/components/generate-tasks-button";
 import { cn } from "@/core/lib/utils";
@@ -87,6 +87,17 @@ export default async function CampaignsPage() {
                     >
                       <Pencil className="h-4 w-4" />
                     </Link>
+                    <form action={duplicateCampaign}>
+                      <input type="hidden" name="id" value={c.id} />
+                      <button
+                        type="submit"
+                        aria-label="Duplicate"
+                        title="Duplicate campaign"
+                        className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+                      >
+                        <Copy className="h-4 w-4" />
+                      </button>
+                    </form>
                     <form action={deleteCampaign}>
                       <input type="hidden" name="id" value={c.id} />
                       <button

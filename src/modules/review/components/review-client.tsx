@@ -2,11 +2,23 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { X, Eye, EyeOff, MapPinOff, CopyX, ChevronLeft, ChevronRight } from "lucide-react";
+import { X, Eye, EyeOff, MapPinOff, CopyX, ChevronLeft, ChevronRight, ZoomIn } from "lucide-react";
 import { Button } from "@/core/ui/button";
 import { cn } from "@/core/lib/utils";
 import type { ReviewRow } from "../queries";
-import { approveSubmission, rejectSubmission } from "../actions";
+import type { PayoutTier } from "@/modules/campaigns/types";
+import { approveSubmission, rejectSubmission, selectPayoutTier } from "../actions";
+
+function verdictCls(verdict: string, payoutModel: string, tiers: PayoutTier[]): string {
+  if (payoutModel === "tiered") {
+    const tier = tiers.find((t) => t.label === verdict);
+    if (!tier) return "bg-muted text-muted-foreground";
+    if (tier.pct === 100) return "bg-success/10 text-success";
+    if (tier.pct === 0)   return "bg-danger/10 text-danger";
+    return "bg-warning/10 text-warning";
+  }
+  return verdict === "approved" ? "bg-success/10 text-success" : "bg-danger/10 text-danger";
+}
 
 function fmt(ts: string) {
   return new Date(ts).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
@@ -24,7 +36,9 @@ export function ReviewClient({
   const [activeId, setActiveId] = useState<string | null>(null);
   const [showAi, setShowAi] = useState(true);
   const [reason, setReason] = useState("");
+  const [reviewerScore, setReviewerScore] = useState("");
   const [rejecting, setRejecting] = useState(false);
+  const [expandedPhoto, setExpandedPhoto] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const activeIndex = reviews.findIndex((r) => r.id === activeId);
@@ -34,6 +48,7 @@ export function ReviewClient({
     setActiveId(r.id);
     setShowAi(r.aiScoreVisible);
     setReason("");
+    setReviewerScore("");
     setRejecting(false);
     setError(null);
   }
@@ -51,8 +66,9 @@ export function ReviewClient({
 
   function approve() {
     if (!active) return;
+    const score = reviewerScore ? Number(reviewerScore) : undefined;
     start(async () => {
-      const res = await approveSubmission(active.id);
+      const res = await approveSubmission(active.id, score);
       if (res?.error) setError(res.error);
       else advanceAfterVerdict();
     });
@@ -105,8 +121,8 @@ export function ReviewClient({
                   {r.aiVerdict ? (
                     <span
                       className={cn(
-                        "inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium capitalize",
-                        r.aiVerdict === "approved" ? "bg-success/10 text-success" : "bg-danger/10 text-danger",
+                        "inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium",
+                        verdictCls(r.aiVerdict, r.payoutModel, r.payoutTiers),
                       )}
                     >
                       {r.aiVerdict}
@@ -200,8 +216,13 @@ export function ReviewClient({
                 <p className="mb-2 text-sm font-medium text-foreground">Submission</p>
                 <div className="grid grid-cols-2 gap-2">
                   {active.photos.map((u) => (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img key={u} src={u} alt="Submission" className="aspect-square w-full rounded-lg border border-border object-cover" />
+                    <button key={u} type="button" onClick={() => setExpandedPhoto(u)} className="group relative">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={u} alt="Submission" className="aspect-square w-full rounded-lg border border-border object-cover" />
+                      <span className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/0 opacity-0 transition-all group-hover:bg-black/20 group-hover:opacity-100">
+                        <ZoomIn className="h-5 w-5 text-white" />
+                      </span>
+                    </button>
                   ))}
                   {active.photos.length === 0 && <p className="text-sm text-muted-foreground">No photos.</p>}
                 </div>
@@ -210,8 +231,13 @@ export function ReviewClient({
                 <p className="mb-2 text-sm font-medium text-foreground">Reference</p>
                 <div className="grid grid-cols-2 gap-2">
                   {active.referenceImages.map((u) => (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img key={u} src={u} alt="Reference" className="aspect-square w-full rounded-lg border border-border object-cover" />
+                    <button key={u} type="button" onClick={() => setExpandedPhoto(u)} className="group relative">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={u} alt="Reference" className="aspect-square w-full rounded-lg border border-border object-cover" />
+                      <span className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/0 opacity-0 transition-all group-hover:bg-black/20 group-hover:opacity-100">
+                        <ZoomIn className="h-5 w-5 text-white" />
+                      </span>
+                    </button>
                   ))}
                   {active.referenceImages.length === 0 && <p className="text-sm text-muted-foreground">No reference.</p>}
                 </div>
@@ -277,46 +303,131 @@ export function ReviewClient({
               )}
             </div>
 
-            {rejecting && (
-              <div className="mt-4 space-y-1.5">
-                <label className="block text-sm font-medium text-foreground">Rejection reason (required)</label>
-                <select
-                  value={reason}
-                  onChange={(e) => setReason(e.target.value)}
-                  className="w-full rounded-xl border border-transparent bg-input px-4 py-3 text-sm text-foreground focus:border-primary focus:bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
-                >
-                  <option value="">Select a reason…</option>
-                  {rejectionReasons.map((r) => (
-                    <option key={r.id} value={r.name}>{r.name}</option>
-                  ))}
-                </select>
+            {active.payoutModel === "tiered" && active.payoutTiers.length > 0 ? (
+              /* ── Tiered: reviewer clicks a tier label button ── */
+              <div className="mt-5 space-y-2">
+                <p className="text-sm font-medium text-foreground">Select verdict</p>
+                <div className="flex flex-wrap gap-2">
+                  {active.payoutTiers.map((tier) => {
+                    const cls =
+                      tier.pct === 100
+                        ? "border-success/40 bg-success/10 text-success hover:bg-success/20"
+                        : tier.pct === 0
+                        ? "border-danger/40 bg-danger/10 text-danger hover:bg-danger/20"
+                        : "border-warning/40 bg-warning/10 text-warning hover:bg-warning/20";
+                    return (
+                      <button
+                        key={tier.label}
+                        type="button"
+                        disabled={pending}
+                        onClick={() => {
+                          start(async () => {
+                            const res = await selectPayoutTier(active.id, tier.label, tier.pct);
+                            if (res?.error) setError(res.error);
+                            else advanceAfterVerdict();
+                          });
+                        }}
+                        className={cn(
+                          "rounded-xl border px-5 py-2.5 text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50",
+                          cls,
+                        )}
+                      >
+                        {tier.label || `${tier.pct}%`}
+                        <span className="ml-2 text-xs opacity-70">({tier.pct}%)</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {error && <p className="mt-1 text-sm font-medium text-danger">{error}</p>}
               </div>
+            ) : (
+              /* ── Binary: existing approve / reject flow ── */
+              <>
+                {!rejecting && (
+                  <div className="mt-4 space-y-1.5">
+                    <label className="block text-sm font-medium text-foreground">
+                      Your score /10{" "}
+                      <span className="font-normal text-muted-foreground">(optional)</span>
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={10}
+                      step={0.5}
+                      value={reviewerScore}
+                      onChange={(e) => setReviewerScore(e.target.value)}
+                      placeholder="e.g. 8"
+                      className="w-32 rounded-xl border border-transparent bg-input px-4 py-2 text-sm text-foreground focus:border-primary focus:bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                  </div>
+                )}
+
+                {rejecting && (
+                  <div className="mt-4 space-y-1.5">
+                    <label className="block text-sm font-medium text-foreground">
+                      Rejection reason (required)
+                    </label>
+                    <select
+                      value={reason}
+                      onChange={(e) => setReason(e.target.value)}
+                      className="w-full rounded-xl border border-transparent bg-input px-4 py-3 text-sm text-foreground focus:border-primary focus:bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    >
+                      <option value="">Select a reason…</option>
+                      {rejectionReasons.map((r) => (
+                        <option key={r.id} value={r.name}>{r.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {error && <p className="mt-3 text-sm font-medium text-danger">{error}</p>}
+
+                <div className="mt-5 flex justify-end gap-2">
+                  {!rejecting ? (
+                    <>
+                      <Button variant="outline" size="md" onClick={() => setRejecting(true)}>
+                        Reject
+                      </Button>
+                      <Button size="md" onClick={approve} disabled={pending}>
+                        {pending ? "Saving…" : "Approve"}
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <Button variant="outline" size="md" onClick={() => setRejecting(false)}>
+                        Back
+                      </Button>
+                      <Button size="md" onClick={reject} disabled={pending}>
+                        {pending ? "Saving…" : "Confirm rejection"}
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </>
             )}
-
-            {error && <p className="mt-3 text-sm font-medium text-danger">{error}</p>}
-
-            <div className="mt-5 flex justify-end gap-2">
-              {!rejecting ? (
-                <>
-                  <Button variant="outline" size="md" onClick={() => setRejecting(true)}>
-                    Reject
-                  </Button>
-                  <Button size="md" onClick={approve} disabled={pending}>
-                    {pending ? "Saving…" : "Approve"}
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <Button variant="outline" size="md" onClick={() => setRejecting(false)}>
-                    Back
-                  </Button>
-                  <Button size="md" onClick={reject} disabled={pending}>
-                    {pending ? "Saving…" : "Confirm rejection"}
-                  </Button>
-                </>
-              )}
-            </div>
           </div>
+        </div>
+      )}
+
+      {/* Photo lightbox */}
+      {expandedPhoto && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setExpandedPhoto(null)}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={expandedPhoto}
+            alt="Full size"
+            className="max-h-full max-w-full rounded-xl object-contain shadow-2xl"
+          />
+          <button
+            type="button"
+            onClick={() => setExpandedPhoto(null)}
+            className="absolute right-4 top-4 rounded-full bg-black/60 p-2 text-white hover:bg-black/80"
+          >
+            <X className="h-5 w-5" />
+          </button>
         </div>
       )}
     </div>

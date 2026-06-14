@@ -1,4 +1,5 @@
 import { requireAccess } from "@/core/auth/access";
+import { getCurrentProfile } from "@/core/auth/session";
 import { listCampaignOptions, getCampaignMatrix } from "@/modules/summary/queries";
 import { listRejectionReasons } from "@/modules/review/queries";
 import { SummaryClient } from "@/modules/summary/components/summary-client";
@@ -10,9 +11,10 @@ export default async function SummaryPage({
 }) {
   await requireAccess("summary");
   const { campaign } = await searchParams;
-  const [campaigns, rejectionReasons] = await Promise.all([
+  const [campaigns, rejectionReasons, profile] = await Promise.all([
     listCampaignOptions(),
     listRejectionReasons(),
+    getCurrentProfile(),
   ]);
   const matrix = campaign ? await getCampaignMatrix(campaign) : null;
 
@@ -22,6 +24,7 @@ export default async function SummaryPage({
       selectedId={campaign ?? null}
       matrix={matrix}
       rejectionReasons={rejectionReasons}
+      isAdmin={!!profile?.is_admin}
     />
   );
 }

@@ -90,3 +90,168 @@ export async function inviteUser(email: string, displayName: string): Promise<Re
   revalidatePath("/users");
   return {};
 }
+
+// ── Shell user helpers ──────────────────────────────────────────────────────
+
+function generateShellId(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let id = "SK-";
+  for (let i = 0; i < 4; i++) id += chars[Math.floor(Math.random() * chars.length)];
+  return id;
+}
+
+export async function createShellUser(values: {
+  display_name: string;
+  job_title_id: string | null;
+  role_id: string | null;
+  storeIds: string[];
+}): Promise<Result & { id?: string }> {
+  const me = await getCurrentProfile();
+  if (!me?.is_admin) return { error: "Not authorized." };
+
+  const supabase = await createClient();
+  const id = generateShellId();
+
+  const { error } = await supabase.from("shell_users").insert({
+    id,
+    display_name: values.display_name.trim(),
+    job_title_id: values.job_title_id || null,
+    role_id: values.role_id || null,
+  });
+  if (error) return { error: error.message };
+
+  if (values.storeIds.length) {
+    await supabase
+      .from("shell_user_stores")
+      .insert(values.storeIds.map((store_id) => ({ shell_user_id: id, store_id })));
+  }
+
+  revalidatePath("/users");
+  return { id };
+}
+
+export async function updateShellUser(
+  id: string,
+  values: {
+    display_name: string;
+    job_title_id: string | null;
+    role_id: string | null;
+    storeIds: string[];
+  },
+): Promise<Result> {
+  const me = await getCurrentProfile();
+  if (!me?.is_admin) return { error: "Not authorized." };
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("shell_users")
+    .update({
+      display_name: values.display_name.trim(),
+      job_title_id: values.job_title_id || null,
+      role_id: values.role_id || null,
+    })
+    .eq("id", id);
+  if (error) return { error: error.message };
+
+  await supabase.from("shell_user_stores").delete().eq("shell_user_id", id);
+  if (values.storeIds.length) {
+    await supabase
+      .from("shell_user_stores")
+      .insert(values.storeIds.map((store_id) => ({ shell_user_id: id, store_id })));
+  }
+
+  revalidatePath("/users");
+  return {};
+}
+
+export async function deleteShellUser(id: string): Promise<Result> {
+  const me = await getCurrentProfile();
+  if (!me?.is_admin) return { error: "Not authorized." };
+
+  const supabase = await createClient();
+  await supabase.from("shell_users").delete().eq("id", id);
+  revalidatePath("/users");
+  return {};
+}
+
+export type BulkShellRow = {
+  id: string;
+  display_name: string;
+  job_title_id: string | null;
+  role_id: string | null;
+  storeIds: string[];
+};
+
+export async function bulkCreateShellUsers(
+  users: BulkShellRow[],
+): Promise<Result & { created?: number }> {
+  const me = await getCurrentProfile();
+  if (!me?.is_admin) return { error: "Not authorized." };
+  if (!users.length) return { created: 0 };
+
+  const supabase = await createClient();
+
+  const { error } = await supabase.from("shell_users").upsert(
+    users.map((u) => ({
+      id: u.id,
+      display_name: u.display_name,
+      job_title_id: u.job_title_id || null,
+      role_id: u.role_id || null,
+    })),
+  );
+  if (error) return { error: error.message };
+
+  const storeRows = users.flatMap((u) =>
+    u.storeIds.map((store_id) => ({ shell_user_id: u.id, store_id })),
+  );
+  if (storeRows.length) {
+    await supabase.from("shell_user_stores").upsert(storeRows);
+  }
+
+  revalidatePath("/users");
+  return { created: users.length };
+}
+
+export async function mapUserToShell(
+  profileId: string,
+  shellId: string,
+): Promise<Result> {
+  const me = await getCurrentProfile();
+  if (!me?.is_admin) return { error: "Not authorized." };
+
+  const supabase = await createClient();
+
+  const { data: shell } = await supabase
+    .from("shell_users")
+    .select("id, job_title_id, role_id, shell_user_stores ( store_id )")
+    .eq("id", shellId)
+    .maybeSingle();
+
+  if (!shell) return { error: "Shell user not found." };
+  const s = shell as any;
+
+  await supabase
+    .from("profiles")
+    .update({ status: "active", job_title_id: s.job_title_id })
+    .eq("id", profileId);
+
+  if (s.role_id) {
+    await supabase.from("user_roles").delete().eq("user_id", profileId);
+    await supabase
+      .from("user_roles")
+      .insert({ user_id: profileId, role_id: s.role_id });
+  }
+
+  const storeIds: string[] = (s.shell_user_stores ?? []).map((x: any) => x.store_id);
+  if (storeIds.length) {
+    await supabase.from("user_stores").delete().eq("user_id", profileId);
+    await supabase
+      .from("user_stores")
+      .insert(storeIds.map((store_id) => ({ user_id: profileId, store_id })));
+  }
+
+  await supabase.from("shell_users").delete().eq("id", shellId);
+
+  revalidatePath("/users");
+  return {};
+}

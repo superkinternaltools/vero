@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { createClient } from "@/core/db/server";
+import { createAdminClient } from "@/core/db/admin";
 
 export type AuthActionState = { error: string } | null;
 
@@ -58,7 +59,22 @@ export async function signUpAction(
   const {
     data: { user },
   } = await supabase.auth.getUser();
+
   if (user) {
+    // Save declared stores as a hint for the admin during mapping
+    const storeIdsRaw = String(formData.get("store_ids") ?? "");
+    const signupStoreIds = storeIdsRaw
+      ? storeIdsRaw.split(",").filter((x) => x.trim())
+      : [];
+
+    if (signupStoreIds.length) {
+      const admin = createAdminClient();
+      await admin
+        .from("profiles")
+        .update({ signup_store_ids: signupStoreIds })
+        .eq("id", user.id);
+    }
+
     const { data: profile } = await supabase
       .from("profiles")
       .select("status")

@@ -2,11 +2,15 @@
 
 import { useState, useTransition, type ReactNode, type ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
-import { X, ImagePlus } from "lucide-react";
+import { X, ImagePlus, FlaskConical, PlusCircle, Trash2 } from "lucide-react";
 import { Input } from "@/core/ui/input";
 import { Button } from "@/core/ui/button";
 import { MultiSelect } from "@/core/ui/multi-select";
 import { createClient } from "@/core/db/client";
+import { testAiPrompt } from "@/modules/ai-review/actions";
+import { StorePicker } from "./store-picker";
+import type { TestAiResult } from "@/modules/ai-review/actions";
+import { cn } from "@/core/lib/utils";
 import type {
   CampaignFormValues,
   Frequency,
@@ -14,6 +18,7 @@ import type {
   ScoreMode,
   AIStrictness,
   CaptureMode,
+  PayoutTier,
 } from "../types";
 import { createCampaign, updateCampaign } from "../actions";
 
@@ -63,6 +68,18 @@ function Toggle({
   );
 }
 
+const SKIP_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function fmtSkipDate(d: string): string {
+  const [y, m, day] = d.split("-").map(Number);
+  return `${day} ${SKIP_MONTHS[m - 1]} ${y}`;
+}
+
+const DEFAULT_TIERS: PayoutTier[] = [
+  { label: "Approved",      min_score: 8, max_score: 10, pct: 100 },
+  { label: "Half Approved", min_score: 6, max_score: 7,  pct: 75  },
+  { label: "Rejected",      min_score: 0, max_score: 5,  pct: 0   },
+];
+
 export function CampaignForm({
   mode,
   campaignId,
@@ -72,7 +89,6 @@ export function CampaignForm({
   jobTitles,
   stores,
   statuses,
-  payoutModels,
 }: {
   mode: "create" | "edit";
   campaignId?: string;
@@ -82,13 +98,20 @@ export function CampaignForm({
   jobTitles: Opt[];
   stores: StoreOpt[];
   statuses: Opt[];
-  payoutModels: Opt[];
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [v, setV] = useState<CampaignFormValues>(initial);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+
+  const [skipDateInput, setSkipDateInput] = useState("");
+
+  const [testPhotoUrl, setTestPhotoUrl] = useState<string | null>(null);
+  const [testUploading, setTestUploading] = useState(false);
+  const [testPending, testStart] = useTransition();
+  const [testResult, setTestResult] = useState<TestAiResult | null>(null);
+  const [testError, setTestError] = useState<string | null>(null);
 
   function set<K extends keyof CampaignFormValues>(k: K, val: CampaignFormValues[K]) {
     setV((p) => ({ ...p, [k]: val }));
@@ -124,6 +147,42 @@ export function CampaignForm({
       ...p,
       reference_images: p.reference_images.filter((_, i) => i !== index),
     }));
+  }
+
+  async function onTestUpload(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setTestUploading(true);
+    setTestError(null);
+    setTestResult(null);
+    const supabase = createClient();
+    const path = `test/${crypto.randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+    const { error: upErr } = await supabase.storage.from("campaign-references").upload(path, file);
+    if (upErr) { setTestError(upErr.message); setTestUploading(false); return; }
+    const { data } = supabase.storage.from("campaign-references").getPublicUrl(path);
+    setTestPhotoUrl(data.publicUrl);
+    setTestUploading(false);
+    e.target.value = "";
+  }
+
+  function runTest() {
+    if (!testPhotoUrl) return;
+    setTestResult(null);
+    setTestError(null);
+    testStart(async () => {
+      const res = await testAiPrompt({
+        referenceImages: v.reference_images,
+        testPhotos: [testPhotoUrl],
+        instructions: v.instructions,
+        rubric: v.scoring_rubric,
+        strictness: v.ai_strictness,
+        passThreshold: v.pass_threshold,
+        payoutModel: v.payout_model,
+        payoutTiers: v.payout_tiers,
+      });
+      if (res.error) setTestError(res.error);
+      else if (res.result) setTestResult(res.result);
+    });
   }
 
   function submit() {
@@ -220,6 +279,53 @@ export function CampaignForm({
         <Toggle label="Allow late uploads" hint="If off, tasks past their due date are marked Missed." checked={v.allow_late} onChange={(b) => set("allow_late", b)} />
         <Toggle label="Skip weekends (daily)" checked={v.skip_weekends} onChange={(b) => set("skip_weekends", b)} />
         <Toggle label="Skip holidays (daily)" checked={v.skip_holidays} onChange={(b) => set("skip_holidays", b)} />
+        {v.frequency === "daily" && (
+          <div className="space-y-2">
+            <label className={labelClass}>Skip specific dates</label>
+            <div className="flex gap-2">
+              <Input
+                type="date"
+                value={skipDateInput}
+                onChange={(e) => setSkipDateInput(e.target.value)}
+              />
+              <Button
+                variant="outline"
+                size="md"
+                onClick={() => {
+                  if (skipDateInput && !v.skip_dates.includes(skipDateInput)) {
+                    set("skip_dates", [...v.skip_dates, skipDateInput].sort());
+                    setSkipDateInput("");
+                  }
+                }}
+                disabled={!skipDateInput || v.skip_dates.includes(skipDateInput)}
+              >
+                Add
+              </Button>
+            </div>
+            {v.skip_dates.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {v.skip_dates.map((d) => (
+                  <span
+                    key={d}
+                    className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-3 py-1 text-xs text-foreground"
+                  >
+                    {fmtSkipDate(d)}
+                    <button
+                      type="button"
+                      onClick={() => set("skip_dates", v.skip_dates.filter((x) => x !== d))}
+                      className="text-muted-foreground hover:text-danger"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Tasks on these dates will not be created and won&apos;t appear in reports.
+            </p>
+          </div>
+        )}
       </Section>
 
       <Section title="Instructions & reference">
@@ -286,12 +392,10 @@ export function CampaignForm({
         </div>
         <div className="space-y-1.5">
           <label className={labelClass}>Assigned stores</label>
-          <MultiSelect
-            options={stores.map((s) => ({ id: s.id, label: s.label }))}
+          <StorePicker
+            options={stores}
             selected={v.storeIds}
             onChange={(ids) => set("storeIds", ids)}
-            placeholder="Select stores…"
-            emptyText="No stores yet — add some in Stores."
           />
         </div>
       </Section>
@@ -299,27 +403,165 @@ export function CampaignForm({
       <Section title="Payout">
         <Toggle label="Enable payout" checked={v.payout_enabled} onChange={(b) => set("payout_enabled", b)} />
         {v.payout_enabled && (
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <label className={labelClass}>Amount (₹) per passing cycle</label>
-              <Input
-                type="number"
-                value={String(v.payout_amount)}
-                onChange={(e) => set("payout_amount", Number(e.target.value))}
-                inputMode="decimal"
-              />
+          <>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <label className={labelClass}>Amount (₹) per passing cycle</label>
+                <Input
+                  type="number"
+                  value={String(v.payout_amount)}
+                  onChange={(e) => set("payout_amount", Number(e.target.value))}
+                  inputMode="decimal"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className={labelClass}>Payout model</label>
+                <div className="flex gap-3">
+                  {(["binary", "tiered"] as const).map((m) => (
+                    <label
+                      key={m}
+                      className={cn(
+                        "flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-xl border py-2.5 text-sm font-medium transition-colors",
+                        v.payout_model === m
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border text-muted-foreground hover:bg-muted",
+                      )}
+                    >
+                      <input
+                        type="radio"
+                        name="payout_model"
+                        value={m}
+                        checked={v.payout_model === m}
+                        onChange={() => {
+                          set("payout_model", m);
+                          if (m === "tiered" && v.payout_tiers.length === 0) {
+                            set("payout_tiers", DEFAULT_TIERS);
+                          }
+                        }}
+                        className="sr-only"
+                      />
+                      <span className="capitalize">{m}</span>
+                    </label>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {v.payout_model === "binary"
+                    ? "Full amount if approved, ₹0 if rejected."
+                    : "Percentage of amount based on final score."}
+                </p>
+              </div>
             </div>
-            <div className="space-y-1.5">
-              <label className={labelClass}>Payout model</label>
-              <select className={selectClass} value={v.payout_model} onChange={(e) => set("payout_model", e.target.value)}>
-                {payoutModels.map((m) => (
-                  <option key={m.id} value={m.name} className="capitalize">
-                    {m.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+
+            {v.payout_model === "tiered" && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className={labelClass}>Score tiers</label>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      set("payout_tiers", [...v.payout_tiers, { label: "", min_score: 0, max_score: 10, pct: 50 }])
+                    }
+                    className="flex items-center gap-1 text-xs text-primary hover:underline"
+                  >
+                    <PlusCircle className="h-3.5 w-3.5" />
+                    Add tier
+                  </button>
+                </div>
+                <div className="overflow-x-auto rounded-xl border border-border">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
+                        <th className="px-3 py-2 text-left font-semibold">Label</th>
+                        <th className="px-3 py-2 text-left font-semibold">Min score</th>
+                        <th className="px-3 py-2 text-left font-semibold">Max score</th>
+                        <th className="px-3 py-2 text-left font-semibold">Payout %</th>
+                        <th className="px-3 py-2" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {v.payout_tiers.map((tier, i) => (
+                        <tr key={i} className="border-b border-border last:border-0">
+                          <td className="px-3 py-2">
+                            <Input
+                              type="text"
+                              value={tier.label}
+                              placeholder="e.g. Approved"
+                              onChange={(e) => {
+                                const tiers = [...v.payout_tiers];
+                                tiers[i] = { ...tiers[i], label: e.target.value };
+                                set("payout_tiers", tiers);
+                              }}
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            <Input
+                              type="number"
+                              value={String(tier.min_score)}
+                              min="0"
+                              max="10"
+                              onChange={(e) => {
+                                const tiers = [...v.payout_tiers];
+                                tiers[i] = { ...tiers[i], min_score: Number(e.target.value) };
+                                set("payout_tiers", tiers);
+                              }}
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            <Input
+                              type="number"
+                              value={String(tier.max_score)}
+                              min="0"
+                              max="10"
+                              onChange={(e) => {
+                                const tiers = [...v.payout_tiers];
+                                tiers[i] = { ...tiers[i], max_score: Number(e.target.value) };
+                                set("payout_tiers", tiers);
+                              }}
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            <Input
+                              type="number"
+                              value={String(tier.pct)}
+                              min="0"
+                              max="100"
+                              onChange={(e) => {
+                                const tiers = [...v.payout_tiers];
+                                tiers[i] = { ...tiers[i], pct: Number(e.target.value) };
+                                set("payout_tiers", tiers);
+                              }}
+                            />
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                set("payout_tiers", v.payout_tiers.filter((_, j) => j !== i))
+                              }
+                              className="rounded-lg p-1 text-muted-foreground hover:bg-danger/10 hover:text-danger"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {v.payout_tiers.length === 0 && (
+                        <tr>
+                          <td colSpan={4} className="p-4 text-center text-xs text-muted-foreground">
+                            No tiers yet — click "Add tier" above.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Score = reviewer score if given, otherwise AI score. First matching tier (top-down) wins.
+                  Payout = % of the amount above.
+                </p>
+              </div>
+            )}
+          </>
         )}
       </Section>
 
@@ -341,10 +583,12 @@ export function CampaignForm({
                   <option value="high">High</option>
                 </select>
               </div>
-              <div className="space-y-1.5">
-                <label className={labelClass}>Pass threshold (/10)</label>
-                <Input type="number" value={String(v.pass_threshold)} onChange={(e) => set("pass_threshold", Number(e.target.value))} inputMode="decimal" />
-              </div>
+              {v.payout_model !== "tiered" && (
+                <div className="space-y-1.5">
+                  <label className={labelClass}>Pass threshold (/10)</label>
+                  <Input type="number" value={String(v.pass_threshold)} onChange={(e) => set("pass_threshold", Number(e.target.value))} inputMode="decimal" />
+                </div>
+              )}
               <div className="space-y-1.5">
                 <label className={labelClass}>Score mode</label>
                 <select className={selectClass} value={v.score_mode} onChange={(e) => set("score_mode", e.target.value as ScoreMode)}>
@@ -363,6 +607,63 @@ export function CampaignForm({
                 onChange={(e) => set("scoring_rubric", e.target.value)}
                 placeholder="e.g. Full product facing forward = high score; missing signage = reject…"
               />
+            </div>
+
+            {/* Prompt tester */}
+            <div className="rounded-xl border border-border/60 bg-muted/30 p-4">
+              <div className="flex items-center gap-2">
+                <FlaskConical className="h-4 w-4 text-muted-foreground" />
+                <p className="text-sm font-medium text-foreground">Test this campaign</p>
+              </div>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Upload a sample photo to preview how the AI would score it using the current (unsaved) settings.
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                {testPhotoUrl && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={testPhotoUrl} alt="Test" className="h-16 w-16 rounded-lg border border-border object-cover" />
+                )}
+                <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm text-muted-foreground hover:bg-muted">
+                  <input type="file" accept="image/*" className="hidden" onChange={onTestUpload} disabled={testUploading} />
+                  {testUploading ? "Uploading…" : testPhotoUrl ? "Change photo" : "Upload test photo"}
+                </label>
+                <Button size="md" onClick={runTest} disabled={testPending || !testPhotoUrl || testUploading}>
+                  {testPending ? "Running…" : "Run AI test"}
+                </Button>
+              </div>
+              {testError && <p className="mt-2 text-sm text-danger">{testError}</p>}
+              {testResult && (
+                <div className="mt-3 rounded-lg border border-border bg-card p-3 text-sm">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg font-bold text-foreground">{testResult.score}/10</span>
+                    {(() => {
+                      const label = testResult.tierLabel ?? testResult.verdict;
+                      let cls = testResult.verdict === "approved" ? "bg-success/10 text-success" : "bg-danger/10 text-danger";
+                      if (testResult.tierLabel) {
+                        const tier = v.payout_tiers.find((t) => t.label === testResult.tierLabel);
+                        if (tier) {
+                          cls = tier.pct === 100 ? "bg-success/10 text-success"
+                              : tier.pct === 0   ? "bg-danger/10 text-danger"
+                              : "bg-warning/10 text-warning";
+                        }
+                      }
+                      return (
+                        <span className={cn("rounded-full px-2.5 py-0.5 text-xs font-medium", cls)}>
+                          {label}
+                        </span>
+                      );
+                    })()}
+                  </div>
+                  {testResult.assessment && (
+                    <ul className="mt-2 list-inside list-disc space-y-0.5 text-muted-foreground">
+                      {testResult.assessment.split("\n").map((line, i) => (
+                        <li key={i}>{line}</li>
+                      ))}
+                    </ul>
+                  )}
+                  <p className="mt-2 text-xs text-muted-foreground">Using current unsaved settings.</p>
+                </div>
+              )}
             </div>
           </>
         )}

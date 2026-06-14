@@ -19,9 +19,6 @@ import {
   createCampaignStatus,
   renameCampaignStatus,
   deleteCampaignStatus,
-  createPayoutModel,
-  renamePayoutModel,
-  deletePayoutModel,
 } from "@/modules/org/actions";
 
 type Item = { id: string; name: string };
@@ -32,7 +29,6 @@ export function SettingsClient({
   rejectionReasons,
   nonSubmissionReasons,
   campaignStatuses,
-  payoutModels,
   roles,
   granted,
 }: {
@@ -40,7 +36,6 @@ export function SettingsClient({
   rejectionReasons: Item[];
   nonSubmissionReasons: Item[];
   campaignStatuses: Item[];
-  payoutModels: Item[];
   roles: RoleWithLanding[];
   granted: Record<string, string[]>;
 }) {
@@ -50,6 +45,10 @@ export function SettingsClient({
   const [needs, setNeeds] = useState(settings.health_needs_attention ?? "50");
   const [windowDays, setWindowDays] = useState(settings.store_score_window_days ?? "60");
   const [geofence, setGeofence] = useState(settings.geofence_radius_m ?? "150");
+  const [sysInstruction, setSysInstruction] = useState(
+    settings.ai_system_instruction ??
+      "You are a retail execution auditor for SuperK. Score the provided store execution photos against the reference images, instructions, and rubric. Respond ONLY with JSON: {\"score\": <number 0-10>, \"assessment\": [<3-5 short bullet strings>]}.",
+  );
   const [saved, setSaved] = useState(false);
 
   function save() {
@@ -60,6 +59,7 @@ export function SettingsClient({
         health_needs_attention: needs,
         store_score_window_days: windowDays,
         geofence_radius_m: geofence,
+        ai_system_instruction: sysInstruction,
       });
       setSaved(true);
       router.refresh();
@@ -116,6 +116,19 @@ export function SettingsClient({
           Health: at or above On-Track = On Track; between the two = Needs Attention; below = Critical.
           Photos taken further than the geofence radius from the store get flagged for the reviewer.
         </p>
+        <div className="mt-4 space-y-1.5">
+          <label className={labelClass}>AI system instruction</label>
+          <textarea
+            value={sysInstruction}
+            onChange={(e) => setSysInstruction(e.target.value)}
+            rows={4}
+            className="w-full rounded-xl border border-transparent bg-input px-4 py-3 text-sm text-foreground focus:border-primary focus:bg-card focus:outline-none focus:ring-2 focus:ring-primary/30 resize-y"
+          />
+          <p className="text-xs text-muted-foreground">
+            This is the fixed system-level instruction given to the AI before every scoring run.
+            The campaign rubric and instructions are added on top of this.
+          </p>
+        </div>
       </section>
 
       <section>
@@ -145,19 +158,12 @@ export function SettingsClient({
             onRename={renameCampaignStatus}
             onDelete={deleteCampaignStatus}
           />
-          <ListManager
-            title="Payout models"
-            items={payoutModels}
-            addPlaceholder="New payout model"
-            onCreate={createPayoutModel}
-            onRename={renamePayoutModel}
-            onDelete={deletePayoutModel}
-          />
         </div>
         <p className="mt-3 text-xs text-muted-foreground">
-          Built-in values (draft, active, paused, completed · binary, tiered) drive app behaviour —
+          Built-in statuses (draft, active, paused, completed) drive app behaviour —
           tasks are generated only for campaigns with status <span className="font-medium">active</span> —
           so they can&apos;t be renamed or deleted, but you can add your own.
+          Payout tiers (binary / tiered) are configured per campaign.
         </p>
       </section>
     </div>

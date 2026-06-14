@@ -9,6 +9,7 @@ export type AiScoringParams = {
   rubric: string | null;
   strictness: string;
   passThreshold: number;
+  systemInstruction?: string;
 };
 
 export type AiResult = {
@@ -47,7 +48,7 @@ export async function runAiScoring(params: AiScoringParams): Promise<AiResult | 
     messages: [
       {
         role: "system",
-        content:
+        content: params.systemInstruction ??
           'You are a retail execution auditor for SuperK. Respond ONLY with JSON: ' +
           '{"score": <number 0-10>, "assessment": [<3-5 short bullet strings>]}.',
       },

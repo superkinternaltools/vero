@@ -5,7 +5,6 @@ import {
   listDepartments,
   listJobTitles,
   listCampaignStatuses,
-  listPayoutModels,
 } from "@/modules/org/queries";
 import { listStores } from "@/modules/stores/queries";
 import { getCampaign } from "@/modules/campaigns/queries";
@@ -19,7 +18,7 @@ export default async function EditCampaignPage({
   await requireAccess("campaigns");
   const { id } = await params;
 
-  const [campaign, executionTypes, departments, jobTitles, stores, statuses, payoutModels] =
+  const [campaign, executionTypes, departments, jobTitles, stores, statuses] =
     await Promise.all([
       getCampaign(id),
       listExecutionTypes(),
@@ -27,7 +26,6 @@ export default async function EditCampaignPage({
       listJobTitles(),
       listStores(),
       listCampaignStatuses(),
-      listPayoutModels(),
     ]);
   if (!campaign) notFound();
 
@@ -43,7 +41,6 @@ export default async function EditCampaignPage({
       jobTitles={jobTitles}
       stores={stores.map((s) => ({ id: s.id, label: `${s.code} — ${s.name}` }))}
       statuses={statuses}
-      payoutModels={payoutModels}
     />
   );
 }

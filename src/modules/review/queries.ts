@@ -1,4 +1,5 @@
 import { createClient } from "@/core/db/server";
+import type { PayoutTier } from "@/modules/campaigns/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export type ReviewRow = {
@@ -17,6 +18,8 @@ export type ReviewRow = {
   geofenceFlag: boolean;
   geofenceDistanceM: number | null;
   duplicateFlag: boolean;
+  payoutModel: string;
+  payoutTiers: PayoutTier[];
 };
 
 export async function listPendingReviews(): Promise<ReviewRow[]> {
@@ -27,7 +30,7 @@ export async function listPendingReviews(): Promise<ReviewRow[]> {
       `
       id, created_at, photos, comments, ai_score, ai_verdict, ai_assessment,
       geofence_flag, geofence_distance_m, duplicate_flag,
-      campaigns ( name, ai_score_visible, reference_images,
+      campaigns ( name, ai_score_visible, reference_images, payout_model, payout_tiers,
                   campaign_departments ( departments ( name ) ) ),
       stores ( name )
       `,
@@ -51,6 +54,8 @@ export async function listPendingReviews(): Promise<ReviewRow[]> {
     geofenceFlag: !!row.geofence_flag,
     geofenceDistanceM: row.geofence_distance_m,
     duplicateFlag: !!row.duplicate_flag,
+    payoutModel: row.campaigns?.payout_model ?? "binary",
+    payoutTiers: row.campaigns?.payout_tiers ?? [],
   }));
 }
 

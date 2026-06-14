@@ -16,7 +16,7 @@ export async function generateTasks(): Promise<{ count: number; error?: string }
   const supabase = await createClient();
   const { data: campaigns, error } = await supabase
     .from("campaigns")
-    .select("id, frequency, start_date, end_date, skip_weekends, campaign_stores ( store_id )")
+    .select("id, frequency, start_date, end_date, skip_weekends, skip_dates, campaign_stores ( store_id )")
     .eq("status", "active")
     .is("deleted_at", null);
   if (error) return { count: 0, error: error.message };
@@ -31,7 +31,7 @@ export async function generateTasks(): Promise<{ count: number; error?: string }
 
   for (const c of (campaigns as any[]) ?? []) {
     if (!c.start_date || !c.end_date) continue;
-    const cycles = computeCycles(c.start_date, c.end_date, c.frequency, c.skip_weekends);
+    const cycles = computeCycles(c.start_date, c.end_date, c.frequency, c.skip_weekends, c.skip_dates ?? []);
     const storeIds = (c.campaign_stores ?? []).map((x: any) => x.store_id);
     for (const store_id of storeIds)
       for (const cyc of cycles)
@@ -159,4 +159,60 @@ export async function markNonSubmission(
 
   revalidatePath("/tasks");
   return {};
+}
+
+export async function deleteTask(taskId: string): Promise<{ error?: string }> {
+  const me = await getCurrentProfile();
+  if (!me?.is_admin) return { error: "Only admins can delete tasks." };
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("tasks")
+    .delete()
+    .eq("id", taskId)
+    .in("status", ["pending", "not_done", "missed"]);
+  if (error) return { error: error.message };
+  revalidatePath("/tasks");
+  return {};
+}
+
+export async function autoGenerateTasks(campaignId: string): Promise<void> {
+  const supabase = await createClient();
+  const { data: c } = await supabase
+    .from("campaigns")
+    .select("id, frequency, start_date, end_date, skip_weekends, skip_dates, campaign_stores ( store_id )")
+    .eq("id", campaignId)
+    .eq("status", "active")
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (!c || !(c as any).start_date || !(c as any).end_date) return;
+
+  const cam = c as any;
+  const cycles = computeCycles(cam.start_date, cam.end_date, cam.frequency, cam.skip_weekends, cam.skip_dates ?? []);
+  const storeIds: string[] = (cam.campaign_stores ?? []).map((x: any) => x.store_id);
+  const rows = storeIds.flatMap((store_id) =>
+    cycles.map((cyc) => ({
+      campaign_id: campaignId,
+      store_id,
+      cycle_start: cyc.start,
+      cycle_end: cyc.end,
+      due_date: cyc.due,
+    })),
+  );
+  if (rows.length === 0) return;
+  await supabase
+    .from("tasks")
+    .upsert(rows, { onConflict: "campaign_id,store_id,due_date", ignoreDuplicates: true });
+  revalidatePath("/tasks");
+}
+
+export async function purgePendingTasks(campaignId: string): Promise<void> {
+  const supabase = await createClient();
+  const today = new Date().toISOString().split("T")[0];
+  await supabase
+    .from("tasks")
+    .delete()
+    .eq("campaign_id", campaignId)
+    .eq("status", "pending")
+    .gte("due_date", today);
+  revalidatePath("/tasks");
 }

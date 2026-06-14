@@ -14,6 +14,9 @@ export type TaskRow = {
   executionTypeName: string | null;
   storeName: string;
   dueDate: string;
+  cycleStart: string;
+  cycleEnd: string;
+  frequency: string;
   status: TaskStatus;
   instructions: string | null;
   referenceImages: string[];
@@ -21,4 +24,5 @@ export type TaskRow = {
   numPhotos: number;
   rejectionReason: string | null;
   nonSubmissionReason: string | null;
+  submittedPhotos: string[];
 };

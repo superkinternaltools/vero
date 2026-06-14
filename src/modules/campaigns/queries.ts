@@ -67,6 +67,7 @@ export async function getCampaign(
     payout_enabled: row.payout_enabled,
     payout_amount: Number(row.payout_amount),
     payout_model: row.payout_model,
+    payout_tiers: row.payout_tiers ?? [],
     ai_review: row.ai_review,
     ai_strictness: row.ai_strictness,
     pass_threshold: Number(row.pass_threshold),
@@ -78,5 +79,6 @@ export async function getCampaign(
     allow_late: row.allow_late,
     skip_weekends: row.skip_weekends,
     skip_holidays: row.skip_holidays,
+    skip_dates: row.skip_dates ?? [],
   };
 }

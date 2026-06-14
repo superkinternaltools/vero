@@ -13,4 +13,17 @@ export type UserRow = {
   departmentIds: string[];
   departmentNames: string[];
   storeIds: string[];
+  signupStoreIds: string[];
+};
+
+export type ShellUser = {
+  id: string;
+  display_name: string;
+  job_title_id: string | null;
+  jobTitleName: string | null;
+  role_id: string | null;
+  roleName: string | null;
+  storeIds: string[];
+  storeLabels: string[];
+  created_at: string;
 };

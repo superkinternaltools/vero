@@ -16,34 +16,52 @@ function addDays(dt: Date, n: number): Date {
 
 const MAX_CYCLES = 366;
 
+// Calendar-month week bands: 1-7, 8-14, 15-21, 22-end
+const WEEK_BANDS: [number, number][] = [[1, 7], [8, 14], [15, 21], [22, 31]];
+
 /** Expands a campaign's date range + frequency into discrete cycles (each with a due date). */
 export function computeCycles(
   startStr: string,
   endStr: string,
   frequency: Frequency,
   skipWeekends: boolean,
+  skipDates: string[] = [],
 ): Cycle[] {
   const start = parse(startStr);
   const end = parse(endStr);
   if (end < start) return [];
   const cycles: Cycle[] = [];
+  const skipSet = new Set(skipDates);
 
   if (frequency === "daily") {
     let cur = start;
     while (cur <= end && cycles.length < MAX_CYCLES) {
       const dow = cur.getUTCDay();
-      if (!(skipWeekends && (dow === 0 || dow === 6))) {
-        const d = fmt(cur);
+      const d = fmt(cur);
+      if (!(skipWeekends && (dow === 0 || dow === 6)) && !skipSet.has(d)) {
         cycles.push({ start: d, end: d, due: d });
       }
       cur = addDays(cur, 1);
     }
   } else if (frequency === "weekly") {
-    let cur = start;
-    while (cur <= end && cycles.length < MAX_CYCLES) {
-      const e = addDays(cur, 6) > end ? end : addDays(cur, 6);
-      cycles.push({ start: fmt(cur), end: fmt(e), due: fmt(e) });
-      cur = addDays(cur, 7);
+    // Weeks are calendar-month aligned: 1–7, 8–14, 15–21, 22–end
+    let yr = start.getUTCFullYear();
+    let mo = start.getUTCMonth();
+
+    outer:
+    while (new Date(Date.UTC(yr, mo, 1)) <= end && cycles.length < MAX_CYCLES) {
+      const eom = new Date(Date.UTC(yr, mo + 1, 0));
+      for (const [ws, we] of WEEK_BANDS) {
+        const wStart = new Date(Date.UTC(yr, mo, ws));
+        const wEnd = new Date(Date.UTC(yr, mo, Math.min(we, eom.getUTCDate())));
+        const cStart = wStart < start ? start : wStart;
+        const cEnd = wEnd > end ? end : wEnd;
+        if (cStart <= cEnd) {
+          cycles.push({ start: fmt(cStart), end: fmt(cEnd), due: fmt(cEnd) });
+          if (cycles.length >= MAX_CYCLES) break outer;
+        }
+      }
+      if (mo === 11) { yr++; mo = 0; } else { mo++; }
     }
   } else {
     let cur = start;

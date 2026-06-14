@@ -1,4 +1,5 @@
 export type Frequency = "daily" | "weekly" | "monthly";
+export type PayoutTier = { label: string; min_score: number; max_score: number; pct: number };
 /** Configurable in Settings (seeded: draft, active, paused, completed). */
 export type CampaignStatus = string;
 export type ScoreMode = "reviewer_preferred" | "ai_preferred" | "ai_auto_approve";
@@ -20,6 +21,7 @@ export type CampaignFormValues = {
   payout_enabled: boolean;
   payout_amount: number;
   payout_model: string;
+  payout_tiers: PayoutTier[];
   ai_review: boolean;
   ai_strictness: AIStrictness;
   pass_threshold: number;
@@ -31,6 +33,7 @@ export type CampaignFormValues = {
   allow_late: boolean;
   skip_weekends: boolean;
   skip_holidays: boolean;
+  skip_dates: string[];
 };
 
 export type CampaignListRow = {
@@ -60,6 +63,7 @@ export const EMPTY_CAMPAIGN: CampaignFormValues = {
   payout_enabled: false,
   payout_amount: 0,
   payout_model: "binary",
+  payout_tiers: [],
   ai_review: true,
   ai_strictness: "medium",
   pass_threshold: 7,
@@ -71,4 +75,5 @@ export const EMPTY_CAMPAIGN: CampaignFormValues = {
   allow_late: false,
   skip_weekends: false,
   skip_holidays: false,
+  skip_dates: [],
 };

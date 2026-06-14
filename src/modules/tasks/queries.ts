@@ -31,11 +31,11 @@ export async function getMyTasks(): Promise<TaskRow[]> {
     .from("tasks")
     .select(
       `
-      id, campaign_id, store_id, due_date, status, non_submission_reason,
-      campaigns ( name, instructions, reference_images, capture_mode, num_photos,
+      id, campaign_id, store_id, due_date, cycle_start, cycle_end, status, non_submission_reason,
+      campaigns ( name, frequency, instructions, reference_images, capture_mode, num_photos,
                   execution_types ( name ), campaign_job_titles ( job_title_id ) ),
       stores ( name ),
-      submissions ( rejection_reason, created_at )
+      submissions ( rejection_reason, photos, created_at )
       `,
     )
     .order("due_date", { ascending: true });
@@ -44,13 +44,31 @@ export async function getMyTasks(): Promise<TaskRow[]> {
   const { data } = await q;
   const raw = (data as any[]) ?? [];
 
+  const now = new Date();
+  const todayStr = now.toISOString().split("T")[0];
+
   const visible = isAdmin
     ? raw
     : raw.filter((row) => {
         const targets = (row.campaigns?.campaign_job_titles ?? []).map(
           (x: any) => x.job_title_id,
         );
-        return targets.length === 0 || (jobTitleId && targets.includes(jobTitleId));
+        if (targets.length > 0 && (!jobTitleId || !targets.includes(jobTitleId))) return false;
+
+        // For pending/missed: only show tasks whose cycle has already started (no future tasks)
+        if (row.status === "pending" || row.status === "missed") {
+          const cycleStart = row.cycle_start ?? row.due_date;
+          if (cycleStart > todayStr) return false;
+
+          // Also hide if expired (past cycle_end + grace window)
+          const freq: string = row.campaigns?.frequency ?? "weekly";
+          const cycleEnd = row.cycle_end ?? row.due_date;
+          const cycleEndDate = new Date(cycleEnd + "T23:59:59Z");
+          const graceDays = freq === "daily" ? 1 : freq === "monthly" ? 2 : 2;
+          const expiresAt = new Date(cycleEndDate.getTime() + graceDays * 24 * 60 * 60 * 1000);
+          if (expiresAt < now) return false;
+        }
+        return true;
       });
 
   return visible.map((row): TaskRow => {
@@ -65,6 +83,9 @@ export async function getMyTasks(): Promise<TaskRow[]> {
       executionTypeName: row.campaigns?.execution_types?.name ?? null,
       storeName: row.stores?.name ?? "—",
       dueDate: row.due_date,
+      cycleStart: row.cycle_start ?? row.due_date,
+      cycleEnd: row.cycle_end ?? row.due_date,
+      frequency: row.campaigns?.frequency ?? "weekly",
       status: row.status,
       instructions: row.campaigns?.instructions ?? null,
       referenceImages: row.campaigns?.reference_images ?? [],
@@ -72,6 +93,7 @@ export async function getMyTasks(): Promise<TaskRow[]> {
       numPhotos: row.campaigns?.num_photos ?? 1,
       rejectionReason: latestSub?.rejection_reason ?? null,
       nonSubmissionReason: row.non_submission_reason ?? null,
+      submittedPhotos: latestSub?.photos ?? [],
     };
   });
 }

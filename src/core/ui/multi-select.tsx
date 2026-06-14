@@ -6,7 +6,9 @@ import { cn } from "@/core/lib/utils";
 
 export type MSOption = { id: string; label: string };
 
-/** A dropdown multi-select: removable pills in the field, searchable checklist in the menu. */
+const PILL_COLLAPSE_THRESHOLD = 4;
+
+/** A dropdown multi-select: removable pills (collapsed to count when many), searchable checklist, select-all. */
 export function MultiSelect({
   options,
   selected,
@@ -34,6 +36,22 @@ export function MultiSelect({
     o.label.toLowerCase().includes(query.trim().toLowerCase()),
   );
 
+  const allFilteredSelected =
+    filtered.length > 0 && filtered.every((o) => selected.includes(o.id));
+
+  function selectAllFiltered() {
+    const filteredIds = filtered.map((o) => o.id);
+    const merged = [...new Set([...selected, ...filteredIds])];
+    onChange(merged);
+  }
+
+  function deselectAllFiltered() {
+    const filteredIds = new Set(filtered.map((o) => o.id));
+    onChange(selected.filter((id) => !filteredIds.has(id)));
+  }
+
+  const collapsed = selectedOpts.length > PILL_COLLAPSE_THRESHOLD;
+
   return (
     <div className="relative">
       <div
@@ -44,25 +62,46 @@ export function MultiSelect({
           {selectedOpts.length === 0 && (
             <span className="px-1.5 text-muted-foreground">{placeholder}</span>
           )}
-          {selectedOpts.map((o) => (
-            <span
-              key={o.id}
-              className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary"
-            >
-              {o.label}
+
+          {/* Collapsed: single count chip */}
+          {collapsed && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
+              {selectedOpts.length} selected
               <button
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  remove(o.id);
+                  onChange([]);
                 }}
-                aria-label={`Remove ${o.label}`}
+                aria-label="Clear all"
                 className="rounded-full hover:bg-primary/20"
               >
                 <X className="h-3 w-3" />
               </button>
             </span>
-          ))}
+          )}
+
+          {/* Expanded: individual pills */}
+          {!collapsed &&
+            selectedOpts.map((o) => (
+              <span
+                key={o.id}
+                className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary"
+              >
+                {o.label}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    remove(o.id);
+                  }}
+                  aria-label={`Remove ${o.label}`}
+                  className="rounded-full hover:bg-primary/20"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
         </div>
         <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
       </div>
@@ -71,6 +110,7 @@ export function MultiSelect({
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} aria-hidden />
           <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-xl border border-border bg-card shadow-lg">
+            {/* Search row */}
             <div className="flex items-center gap-2 border-b border-border px-3 py-2">
               <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
               <input
@@ -81,6 +121,45 @@ export function MultiSelect({
                 className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
               />
             </div>
+
+            {/* Select-all / clear bar */}
+            {filtered.length > 1 && (
+              <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
+                <span className="text-xs text-muted-foreground">
+                  {filtered.length} {query.trim() ? "matching" : "total"}
+                </span>
+                <div className="flex items-center gap-3">
+                  {!allFilteredSelected ? (
+                    <button
+                      type="button"
+                      onClick={selectAllFiltered}
+                      className="text-xs font-medium text-primary hover:underline"
+                    >
+                      Select all
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={deselectAllFiltered}
+                      className="text-xs font-medium text-muted-foreground hover:text-foreground hover:underline"
+                    >
+                      Deselect all
+                    </button>
+                  )}
+                  {selected.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => onChange([])}
+                      className="text-xs text-muted-foreground hover:text-danger hover:underline"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Options list */}
             <div className="max-h-52 overflow-y-auto p-1">
               {filtered.length === 0 && (
                 <p className="px-3 py-2 text-sm text-muted-foreground">

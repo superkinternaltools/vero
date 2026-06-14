@@ -7,6 +7,6 @@ export async function listStores(): Promise<Store[]> {
     .from("stores")
     .select("id, code, name, aligned, store_type, latitude, longitude, score, created_at")
     .is("deleted_at", null)
-    .order("code", { ascending: true });
+    .order("name", { ascending: true });
   return (data as Store[]) ?? [];
 }
