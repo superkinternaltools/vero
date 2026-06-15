@@ -1,5 +1,9 @@
-import { createClient } from "@/core/db/server";
+import { createAdminClient } from "@/core/db/admin";
 import type { PayoutTier } from "@/modules/campaigns/types";
+
+// Admin client used so reviewers (non-admin) can read the review queue.
+// RLS on submissions only covers admins and field users; reviewers have no read policy.
+// Page access is enforced by requireAccess("review") before this query runs.
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export type ReviewRow = {
@@ -23,7 +27,7 @@ export type ReviewRow = {
 };
 
 export async function listPendingReviews(): Promise<ReviewRow[]> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const { data } = await supabase
     .from("submissions")
     .select(
@@ -60,7 +64,7 @@ export async function listPendingReviews(): Promise<ReviewRow[]> {
 }
 
 export async function listRejectionReasons(): Promise<{ id: string; name: string }[]> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const { data } = await supabase.from("rejection_reasons").select("id, name").order("name");
   return (data as { id: string; name: string }[]) ?? [];
 }

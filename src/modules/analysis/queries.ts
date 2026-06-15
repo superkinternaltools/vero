@@ -149,7 +149,7 @@ export async function getOverviewData(params: {
   let tq = supabase
     .from("tasks")
     .select(
-      "status, campaign_id, campaigns ( id, name, payout_enabled, payout_amount )",
+      "id, status, campaign_id, campaigns ( id, name, payout_enabled, payout_amount, payout_model, payout_tiers )",
     )
     .gte("due_date", params.dateFrom)
     .lte("due_date", params.dateTo);
@@ -164,10 +164,13 @@ export async function getOverviewData(params: {
     name: string;
     payout_enabled: boolean;
     payout_amount: number;
+    payout_model: string;
+    payout_tiers: Array<{ label: string; pct: number }>;
     assigned: number;
     submitted: number;
     approved: number;
     missed: number;
+    taskIds: string[];
   };
   const campaignMap = new Map<string, CRow>();
 
@@ -179,17 +182,56 @@ export async function getOverviewData(params: {
         name: c?.name ?? "—",
         payout_enabled: c?.payout_enabled ?? false,
         payout_amount: Number(c?.payout_amount ?? 0),
+        payout_model: c?.payout_model ?? "binary",
+        payout_tiers: c?.payout_tiers ?? [],
         assigned: 0,
         submitted: 0,
         approved: 0,
         missed: 0,
+        taskIds: [],
       });
     }
     const row = campaignMap.get(cid)!;
+    row.taskIds.push(t.id as string);
     row.assigned++;
     if (["submitted", "approved", "rejected"].includes(t.status)) row.submitted++;
     if (t.status === "approved") row.approved++;
     if (t.status === "missed") row.missed++;
+  }
+
+  // For tiered campaigns fetch submissions to get the reviewer-chosen tier label per task
+  const tieredIds = [...campaignMap.entries()]
+    .filter(([, r]) => r.payout_enabled && r.payout_model === "tiered")
+    .map(([id]) => id);
+
+  const taskTierLabel = new Map<string, string>();
+  if (tieredIds.length > 0) {
+    const allTaskIds = [...campaignMap.entries()]
+      .filter(([id]) => tieredIds.includes(id))
+      .flatMap(([, r]) => r.taskIds);
+    if (allTaskIds.length > 0) {
+      const { data: subs } = await supabase
+        .from("submissions")
+        .select("task_id, payout_tier_label")
+        .in("task_id", allTaskIds)
+        .not("payout_tier_label", "is", null);
+      for (const s of (subs as any[]) ?? []) {
+        if (s.task_id && s.payout_tier_label) taskTierLabel.set(s.task_id, s.payout_tier_label);
+      }
+    }
+  }
+
+  function calcPayout(id: string, row: CRow): number {
+    if (!row.payout_enabled) return 0;
+    if (row.payout_model === "tiered") {
+      return row.taskIds.reduce((sum, tid) => {
+        const label = taskTierLabel.get(tid);
+        if (!label) return sum;
+        const tier = row.payout_tiers.find((t) => t.label === label);
+        return sum + (tier ? row.payout_amount * (tier.pct / 100) : 0);
+      }, 0);
+    }
+    return row.approved * row.payout_amount;
   }
 
   let totA = 0, totS = 0, totAp = 0, totM = 0, totPay = 0;
@@ -200,7 +242,7 @@ export async function getOverviewData(params: {
     totS += row.submitted;
     totAp += row.approved;
     totM += row.missed;
-    const campPay = row.payout_enabled ? row.approved * row.payout_amount : 0;
+    const campPay = calcPayout(id, row);
     totPay += campPay;
     byCampaign.push({
       id,
