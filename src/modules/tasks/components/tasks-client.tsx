@@ -307,7 +307,21 @@ export function TasksClient({
                     </span>
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <Button size="md" onClick={() => open(t)}>Upload</Button>
+                    <div className="flex flex-col items-end gap-2">
+                      <Button size="md" onClick={() => open(t)}>Upload</Button>
+                      {/* Mobile-only can't-do-it — shown inline since the column is hidden */}
+                      <select
+                        defaultValue=""
+                        onChange={(e) => { cantDo(t, e.target.value); e.target.value = ""; }}
+                        disabled={pending}
+                        className="sm:hidden rounded-lg border border-transparent bg-input px-2 py-1.5 text-xs text-muted-foreground focus:border-primary focus:outline-none"
+                      >
+                        <option value="">Can&apos;t do it?</option>
+                        {nonSubmissionReasons.map((r) => (
+                          <option key={r.id} value={r.name}>{r.name}</option>
+                        ))}
+                      </select>
+                    </div>
                   </td>
                   <td className="hidden px-4 py-3 sm:table-cell">
                     <select

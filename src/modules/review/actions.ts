@@ -1,12 +1,15 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createClient } from "@/core/db/server";
+import { createAdminClient } from "@/core/db/admin";
 
 type Result = { error?: string };
 
+// Review actions use the admin client because RLS on submissions restricts updates
+// to the submitter or admin — reviewers need to bypass RLS for verdict writes.
+// Page-level access is already enforced by requireAccess("review").
 async function setTaskStatusFor(
-  supabase: Awaited<ReturnType<typeof createClient>>,
+  supabase: ReturnType<typeof createAdminClient>,
   submissionId: string,
   status: "approved" | "rejected",
 ) {
@@ -19,7 +22,7 @@ async function setTaskStatusFor(
 }
 
 export async function approveSubmission(id: string, reviewerScore?: number): Promise<Result> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const update: Record<string, unknown> = {
     human_verdict: "approved",
     status: "approved",
@@ -40,8 +43,9 @@ export async function selectPayoutTier(
   id: string,
   tierLabel: string,
   tierPct: number,
+  rejectionReason?: string,
 ): Promise<Result> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const isApproved = tierPct > 0;
   const verdict = isApproved ? "approved" : "rejected";
   const { error } = await supabase
@@ -50,7 +54,7 @@ export async function selectPayoutTier(
       human_verdict: verdict,
       status: verdict,
       payout_tier_label: tierLabel,
-      rejection_reason: null,
+      rejection_reason: (!isApproved && rejectionReason?.trim()) ? rejectionReason.trim() : null,
     })
     .eq("id", id);
   if (error) return { error: error.message };
@@ -63,7 +67,7 @@ export async function selectPayoutTier(
 
 export async function rejectSubmission(id: string, reason: string): Promise<Result> {
   if (!reason.trim()) return { error: "A rejection reason is required." };
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const { error } = await supabase
     .from("submissions")
     .update({ human_verdict: "rejected", status: "rejected", rejection_reason: reason })

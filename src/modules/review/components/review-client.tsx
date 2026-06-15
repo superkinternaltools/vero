@@ -38,6 +38,7 @@ export function ReviewClient({
   const [reason, setReason] = useState("");
   const [reviewerScore, setReviewerScore] = useState("");
   const [rejecting, setRejecting] = useState(false);
+  const [pendingTier, setPendingTier] = useState<{ label: string; pct: number } | null>(null);
   const [expandedPhoto, setExpandedPhoto] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -50,6 +51,7 @@ export function ReviewClient({
     setReason("");
     setReviewerScore("");
     setRejecting(false);
+    setPendingTier(null);
     setError(null);
   }
 
@@ -307,38 +309,83 @@ export function ReviewClient({
               /* ── Tiered: reviewer clicks a tier label button ── */
               <div className="mt-5 space-y-2">
                 <p className="text-sm font-medium text-foreground">Select verdict</p>
-                <div className="flex flex-wrap gap-2">
-                  {active.payoutTiers.map((tier) => {
-                    const cls =
-                      tier.pct === 100
-                        ? "border-success/40 bg-success/10 text-success hover:bg-success/20"
-                        : tier.pct === 0
-                        ? "border-danger/40 bg-danger/10 text-danger hover:bg-danger/20"
-                        : "border-warning/40 bg-warning/10 text-warning hover:bg-warning/20";
-                    return (
-                      <button
-                        key={tier.label}
-                        type="button"
-                        disabled={pending}
+                {pendingTier ? (
+                  /* Step 2 — rejection reason for 0% tiers */
+                  <div className="space-y-3 rounded-xl border border-danger/30 bg-danger/5 p-4">
+                    <p className="text-sm font-medium text-foreground">
+                      Rejecting as <span className="text-danger">{pendingTier.label}</span> — select a reason
+                    </p>
+                    <select
+                      value={reason}
+                      onChange={(e) => setReason(e.target.value)}
+                      className="w-full rounded-xl border border-transparent bg-input px-4 py-3 text-sm text-foreground focus:border-primary focus:bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    >
+                      <option value="">Select a reason…</option>
+                      {rejectionReasons.map((r) => (
+                        <option key={r.id} value={r.name}>{r.name}</option>
+                      ))}
+                    </select>
+                    {error && <p className="text-sm font-medium text-danger">{error}</p>}
+                    <div className="flex gap-2">
+                      <Button variant="outline" size="md" onClick={() => { setPendingTier(null); setReason(""); setError(null); }}>
+                        Back
+                      </Button>
+                      <Button
+                        size="md"
+                        disabled={pending || !reason}
                         onClick={() => {
                           start(async () => {
-                            const res = await selectPayoutTier(active.id, tier.label, tier.pct);
+                            const res = await selectPayoutTier(active.id, pendingTier.label, pendingTier.pct, reason);
                             if (res?.error) setError(res.error);
                             else advanceAfterVerdict();
                           });
                         }}
-                        className={cn(
-                          "rounded-xl border px-5 py-2.5 text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50",
-                          cls,
-                        )}
                       >
-                        {tier.label || `${tier.pct}%`}
-                        <span className="ml-2 text-xs opacity-70">({tier.pct}%)</span>
-                      </button>
-                    );
-                  })}
-                </div>
-                {error && <p className="mt-1 text-sm font-medium text-danger">{error}</p>}
+                        {pending ? "Saving…" : "Confirm rejection"}
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {active.payoutTiers.map((tier) => {
+                      const cls =
+                        tier.pct === 100
+                          ? "border-success/40 bg-success/10 text-success hover:bg-success/20"
+                          : tier.pct === 0
+                          ? "border-danger/40 bg-danger/10 text-danger hover:bg-danger/20"
+                          : "border-warning/40 bg-warning/10 text-warning hover:bg-warning/20";
+                      return (
+                        <button
+                          key={tier.label}
+                          type="button"
+                          disabled={pending}
+                          onClick={() => {
+                            if (tier.pct === 0) {
+                              // Ask for rejection reason before submitting
+                              setPendingTier(tier);
+                              setReason("");
+                              setError(null);
+                            } else {
+                              start(async () => {
+                                const res = await selectPayoutTier(active.id, tier.label, tier.pct);
+                                if (res?.error) setError(res.error);
+                                else advanceAfterVerdict();
+                              });
+                            }
+                          }}
+                          className={cn(
+                            "rounded-xl border px-5 py-2.5 text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50",
+                            cls,
+                          )}
+                        >
+                          {tier.label || `${tier.pct}%`}
+                          <span className="ml-2 text-xs opacity-70">({tier.pct}%)</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                {!pendingTier && error && <p className="mt-1 text-sm font-medium text-danger">{error}</p>}
               </div>
             ) : (
               /* ── Binary: existing approve / reject flow ── */
