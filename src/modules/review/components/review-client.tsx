@@ -117,10 +117,10 @@ export function ReviewClient({
                 <td className="px-4 py-3 text-muted-foreground">{r.storeName}</td>
                 <td className="px-4 py-3 text-muted-foreground">{r.departmentName ?? "—"}</td>
                 <td className="px-4 py-3 text-muted-foreground">
-                  {r.aiScore != null ? `${r.aiScore}/10` : "—"}
+                  {r.aiScoreVisible && r.aiScore != null ? `${r.aiScore}/10` : "—"}
                 </td>
                 <td className="px-4 py-3">
-                  {r.aiVerdict ? (
+                  {r.aiScoreVisible && r.aiVerdict ? (
                     <span
                       className={cn(
                         "inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium",
@@ -273,16 +273,20 @@ export function ReviewClient({
             <div className="mt-4 rounded-xl border border-border p-4">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-medium text-foreground">AI assessment</p>
-                <button
-                  type="button"
-                  onClick={() => setShowAi((v) => !v)}
-                  className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
-                >
-                  {showAi ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                  {showAi ? "Hide (prevent bias)" : "Reveal AI"}
-                </button>
+                {active.aiScoreVisible && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAi((v) => !v)}
+                    className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                  >
+                    {showAi ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    {showAi ? "Hide (prevent bias)" : "Reveal AI"}
+                  </button>
+                )}
               </div>
-              {showAi ? (
+              {!active.aiScoreVisible ? (
+                <p className="mt-2 text-sm text-muted-foreground">Hidden for this campaign — decide independently.</p>
+              ) : showAi ? (
                 active.aiScore != null ? (
                   <div className="mt-2 text-sm text-muted-foreground">
                     <p>
