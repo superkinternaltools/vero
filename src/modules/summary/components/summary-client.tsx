@@ -649,6 +649,21 @@ export function SummaryClient({
               )}
             </div>
 
+            {isAdmin && cell.data.aiScore != null && (
+              <div className="mt-3 rounded-xl border border-border p-3 text-sm text-muted-foreground">
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-foreground">AI assessment</p>
+                <p>
+                  <span className="font-semibold text-foreground">{cell.data.aiScore}/10</span>
+                  {cell.data.aiVerdict && ` · ${cell.data.aiVerdict}`}
+                </p>
+                {cell.data.aiAssessment && (
+                  <ul className="mt-1 list-inside list-disc whitespace-pre-line">
+                    {cell.data.aiAssessment}
+                  </ul>
+                )}
+              </div>
+            )}
+
             {cell.data.submittedByName && (
               <p className="mt-2 text-sm text-muted-foreground">
                 Submitted by: <span className="font-medium text-foreground">{cell.data.submittedByName}</span>

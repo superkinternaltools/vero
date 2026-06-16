@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Vero — Execution Proof",
+  title: "Vero. by SuperK",
   description: "Proof of in-store execution, verified. By SuperK.",
 };
 

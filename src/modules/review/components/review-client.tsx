@@ -20,6 +20,12 @@ function verdictCls(verdict: string, payoutModel: string, tiers: PayoutTier[]): 
   return verdict === "approved" ? "bg-success/10 text-success" : "bg-danger/10 text-danger";
 }
 
+/** For tiered campaigns, map AI score to the tier whose range covers it. */
+function aiSuggestedTier(score: number | null, tiers: PayoutTier[]): PayoutTier | null {
+  if (score == null || tiers.length === 0) return null;
+  return tiers.find((t) => score >= t.min_score && score <= t.max_score) ?? null;
+}
+
 function fmt(ts: string) {
   return new Date(ts).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
@@ -27,9 +33,11 @@ function fmt(ts: string) {
 export function ReviewClient({
   reviews,
   rejectionReasons,
+  isAdmin,
 }: {
   reviews: ReviewRow[];
   rejectionReasons: { id: string; name: string }[];
+  isAdmin: boolean;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -47,7 +55,8 @@ export function ReviewClient({
 
   function open(r: ReviewRow) {
     setActiveId(r.id);
-    setShowAi(r.aiScoreVisible);
+    // Admin always gets the toggle; start visible if the campaign allows it or if admin (they can always reveal)
+    setShowAi(isAdmin ? true : r.aiScoreVisible);
     setReason("");
     setReviewerScore("");
     setRejecting(false);
@@ -117,18 +126,26 @@ export function ReviewClient({
                 <td className="px-4 py-3 text-muted-foreground">{r.storeName}</td>
                 <td className="px-4 py-3 text-muted-foreground">{r.departmentName ?? "—"}</td>
                 <td className="px-4 py-3 text-muted-foreground">
-                  {r.aiScoreVisible && r.aiScore != null ? `${r.aiScore}/10` : "—"}
+                  {(isAdmin || r.aiScoreVisible) && r.aiScore != null ? `${r.aiScore}/10` : "—"}
                 </td>
                 <td className="px-4 py-3">
-                  {r.aiScoreVisible && r.aiVerdict ? (
-                    <span
-                      className={cn(
-                        "inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium",
-                        verdictCls(r.aiVerdict, r.payoutModel, r.payoutTiers),
-                      )}
-                    >
-                      {r.aiVerdict}
-                    </span>
+                  {(isAdmin || r.aiScoreVisible) ? (
+                    r.payoutModel === "tiered" ? (
+                      (() => {
+                        const tier = aiSuggestedTier(r.aiScore, r.payoutTiers);
+                        return tier ? (
+                          <span className={cn("inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium", verdictCls(tier.label, r.payoutModel, r.payoutTiers))}>
+                            {tier.label}
+                          </span>
+                        ) : <span className="text-muted-foreground">—</span>;
+                      })()
+                    ) : r.aiVerdict ? (
+                      <span className={cn("inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium", verdictCls(r.aiVerdict, r.payoutModel, r.payoutTiers))}>
+                        {r.aiVerdict}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )
                   ) : (
                     <span className="text-muted-foreground">—</span>
                   )}
@@ -273,7 +290,8 @@ export function ReviewClient({
             <div className="mt-4 rounded-xl border border-border p-4">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-medium text-foreground">AI assessment</p>
-                {active.aiScoreVisible && (
+                {/* Admin always gets the toggle; non-admin only when the campaign allows it */}
+                {(isAdmin || active.aiScoreVisible) && (
                   <button
                     type="button"
                     onClick={() => setShowAi((v) => !v)}
@@ -284,14 +302,21 @@ export function ReviewClient({
                   </button>
                 )}
               </div>
-              {!active.aiScoreVisible ? (
+              {/* Non-admin reviewer on a hidden campaign: permanently locked out */}
+              {!isAdmin && !active.aiScoreVisible ? (
                 <p className="mt-2 text-sm text-muted-foreground">Hidden for this campaign — decide independently.</p>
               ) : showAi ? (
                 active.aiScore != null ? (
                   <div className="mt-2 text-sm text-muted-foreground">
                     <p>
-                      <span className="font-semibold text-foreground">{active.aiScore}/10</span>{" "}
-                      · {active.aiVerdict}
+                      <span className="font-semibold text-foreground">{active.aiScore}/10</span>
+                      {" · "}
+                      {active.payoutModel === "tiered"
+                        ? (aiSuggestedTier(active.aiScore, active.payoutTiers)?.label ?? active.aiVerdict)
+                        : active.aiVerdict}
+                      {active.payoutModel === "tiered" && (
+                        <span className="ml-1 text-xs opacity-60">(AI suggestion)</span>
+                      )}
                     </p>
                     {active.aiAssessment && (
                       <ul className="mt-1 list-inside list-disc whitespace-pre-line">

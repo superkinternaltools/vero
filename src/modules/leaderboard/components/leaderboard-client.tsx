@@ -43,7 +43,7 @@ const STATUS_META: Record<string, { label: string; cls: string }> = {
   approved:  { label: "Approved",   cls: "bg-success/10 text-success" },
   rejected:  { label: "Rejected",   cls: "bg-danger/10 text-danger" },
   submitted: { label: "Submitted",  cls: "bg-info/10 text-info" },
-  pending:   { label: "Pending",    cls: "bg-warning/10 text-warning" },
+  pending:   { label: "Not done",   cls: "bg-muted text-muted-foreground" },
   missed:    { label: "Missed",     cls: "bg-muted text-muted-foreground" },
   not_done:  { label: "Not done",   cls: "bg-muted text-muted-foreground" },
 };
@@ -167,15 +167,15 @@ export function LeaderboardClient({
 
   const DETAIL_FILTERS = [
     { key: "all",      label: "All",      count: (taskDetails ?? []).length },
-    { key: "pending",  label: "Pending",  count: pendingCount },
+    { key: "not_done", label: "Not done", count: pendingCount + notDoneCount },
     { key: "done",     label: "Done",     count: doneCount },
     { key: "missed",   label: "Missed",   count: missedCount },
-    { key: "not_done", label: "Not done", count: notDoneCount },
   ];
 
   const visibleTasks = (taskDetails ?? []).filter((t) => {
     if (detailStatusFilter === "all") return true;
     if (detailStatusFilter === "done") return DONE_STATUSES.has(t.status);
+    if (detailStatusFilter === "not_done") return t.status === "pending" || t.status === "not_done";
     return t.status === detailStatusFilter;
   });
 
@@ -385,8 +385,8 @@ export function LeaderboardClient({
                 { label: "Assigned", value: selectedJtRow.assigned },
                 { label: "Done",     value: selectedJtRow.done },
                 { label: "Approved", value: approvedCount },
-                { label: "Pending",  value: pendingCount },
-                { label: "Not done", value: notDoneCount + missedCount },
+                { label: "Missed",   value: missedCount },
+                { label: "Not done", value: pendingCount + notDoneCount },
               ].map((s) => (
                 <div key={s.label} className="rounded-xl bg-muted/50 p-3 text-center">
                   <p className="text-xl font-bold text-foreground">{detailPending ? "—" : s.value}</p>
@@ -473,9 +473,9 @@ export function LeaderboardClient({
                           <p className="text-sm text-muted-foreground">Task was not submitted before the deadline.</p>
                         )}
 
-                        {/* Pending — no submission yet */}
+                        {/* Pending — not submitted */}
                         {t.status === "pending" && (
-                          <p className="text-sm text-muted-foreground">Awaiting submission.</p>
+                          <p className="text-sm text-muted-foreground">Not submitted.</p>
                         )}
 
                         {/* Submission detail */}

@@ -9,6 +9,7 @@ export type CellData = {
   submittedByName: string | null;
   aiScore: number | null;
   aiVerdict: string | null;
+  aiAssessment: string | null;
   humanVerdict: string | null;
   rejectionReason: string | null;
   geofenceFlag: boolean;
@@ -51,7 +52,7 @@ export async function getCampaignMatrix(id: string): Promise<Matrix | null> {
       `
       id, store_id, due_date, status,
       stores ( name ),
-      submissions ( id, photos, ai_score, ai_verdict, human_verdict, rejection_reason, geofence_flag, duplicate_flag, geofence_distance_m, payout_tier_label, created_at, submitted_by, profiles ( display_name ) )
+      submissions ( id, photos, ai_score, ai_verdict, ai_assessment, human_verdict, rejection_reason, geofence_flag, duplicate_flag, geofence_distance_m, payout_tier_label, created_at, submitted_by, profiles ( display_name ) )
       `,
     )
     .eq("campaign_id", id)
@@ -76,6 +77,7 @@ export async function getCampaignMatrix(id: string): Promise<Matrix | null> {
       submittedByName: latest?.profiles?.display_name ?? null,
       aiScore: latest?.ai_score ?? null,
       aiVerdict: latest?.ai_verdict ?? null,
+      aiAssessment: latest?.ai_assessment ?? null,
       humanVerdict: latest?.human_verdict ?? null,
       rejectionReason: latest?.rejection_reason ?? null,
       geofenceFlag: latest?.geofence_flag ?? false,

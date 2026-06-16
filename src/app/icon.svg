@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- SuperK red background -->
+  <rect width="100" height="100" fill="#E31E24"/>
+
+  <!-- Bag handle (white arch) -->
+  <path d="M35 46 C35 23 65 23 65 46" fill="none" stroke="white" stroke-width="8" stroke-linecap="round"/>
+
+  <!-- Bag body (white) — slightly wider at top, tapers to bottom -->
+  <path d="M16 46 L84 46 L76 88 Q76 92 72 92 L28 92 Q24 92 24 88 Z" fill="white"/>
+
+  <!-- Red K cut-out inside bag -->
+  <!-- Vertical stem -->
+  <rect x="32" y="53" width="10" height="32" fill="#E31E24"/>
+  <!-- Top-right arm -->
+  <polygon points="42,67 57,53 67,53 51,67" fill="#E31E24"/>
+  <!-- Bottom-right arm -->
+  <polygon points="42,67 67,85 57,85 42,67" fill="#E31E24"/>
+</svg>
