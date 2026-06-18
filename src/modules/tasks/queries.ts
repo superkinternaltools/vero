@@ -55,18 +55,12 @@ export async function getMyTasks(): Promise<TaskRow[]> {
         );
         if (targets.length > 0 && (!jobTitleId || !targets.includes(jobTitleId))) return false;
 
-        // For pending/missed: only show tasks whose cycle has already started (no future tasks)
+        // For pending: only show if today falls within this cycle's window (no past, no future)
         if (row.status === "pending" || row.status === "missed") {
           const cycleStart = row.cycle_start ?? row.due_date;
-          if (cycleStart > todayStr) return false;
-
-          // Also hide if expired (past cycle_end + grace window)
-          const freq: string = row.campaigns?.frequency ?? "weekly";
           const cycleEnd = row.cycle_end ?? row.due_date;
-          const cycleEndDate = new Date(cycleEnd + "T23:59:59Z");
-          const graceDays = freq === "daily" ? 1 : freq === "monthly" ? 2 : 2;
-          const expiresAt = new Date(cycleEndDate.getTime() + graceDays * 24 * 60 * 60 * 1000);
-          if (expiresAt < now) return false;
+          if (cycleStart > todayStr) return false; // future cycle — not yet live
+          if (cycleEnd < todayStr) return false;   // past cycle — window closed
         }
         return true;
       });
