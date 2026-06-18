@@ -19,6 +19,9 @@ import {
   createCampaignStatus,
   renameCampaignStatus,
   deleteCampaignStatus,
+  createExecutionType,
+  renameExecutionType,
+  deleteExecutionType,
 } from "@/modules/org/actions";
 
 type Item = { id: string; name: string };
@@ -29,6 +32,7 @@ export function SettingsClient({
   rejectionReasons,
   nonSubmissionReasons,
   campaignStatuses,
+  executionTypes,
   roles,
   granted,
 }: {
@@ -36,6 +40,7 @@ export function SettingsClient({
   rejectionReasons: Item[];
   nonSubmissionReasons: Item[];
   campaignStatuses: Item[];
+  executionTypes: Item[];
   roles: RoleWithLanding[];
   granted: Record<string, string[]>;
 }) {
@@ -157,6 +162,14 @@ export function SettingsClient({
             onCreate={createCampaignStatus}
             onRename={renameCampaignStatus}
             onDelete={deleteCampaignStatus}
+          />
+          <ListManager
+            title="Execution types"
+            items={executionTypes}
+            addPlaceholder="e.g. Gondola End"
+            onCreate={createExecutionType}
+            onRename={renameExecutionType}
+            onDelete={deleteExecutionType}
           />
         </div>
         <p className="mt-3 text-xs text-muted-foreground">
