@@ -56,13 +56,11 @@ export async function getMyTasks(): Promise<TaskRow[]> {
       if (targets.length > 0 && (!jobTitleId || !targets.includes(jobTitleId))) return false;
     }
 
-    // For pending: only show if today falls within this cycle's window (no past, no future)
-    if (row.status === "pending" || row.status === "missed") {
-      const cycleStart = row.cycle_start ?? row.due_date;
-      const cycleEnd = row.cycle_end ?? row.due_date;
-      if (cycleStart > todayStr) return false; // future cycle — not yet live
-      if (cycleEnd < todayStr) return false;   // past cycle — window closed
-    }
+    // Only show tasks within the current cycle window — no past, no future
+    const cycleStart = row.cycle_start ?? row.due_date;
+    const cycleEnd = row.cycle_end ?? row.due_date;
+    if (cycleStart > todayStr) return false; // future cycle — not yet live
+    if (cycleEnd < todayStr) return false;   // past cycle — window closed
     return true;
   });
 
