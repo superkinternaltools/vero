@@ -47,23 +47,24 @@ export async function getMyTasks(): Promise<TaskRow[]> {
   const now = new Date();
   const todayStr = now.toISOString().split("T")[0];
 
-  const visible = isAdmin
-    ? raw
-    : raw.filter((row) => {
-        const targets = (row.campaigns?.campaign_job_titles ?? []).map(
-          (x: any) => x.job_title_id,
-        );
-        if (targets.length > 0 && (!jobTitleId || !targets.includes(jobTitleId))) return false;
+  const visible = raw.filter((row) => {
+    // Job title targeting — skip for admins
+    if (!isAdmin) {
+      const targets = (row.campaigns?.campaign_job_titles ?? []).map(
+        (x: any) => x.job_title_id,
+      );
+      if (targets.length > 0 && (!jobTitleId || !targets.includes(jobTitleId))) return false;
+    }
 
-        // For pending: only show if today falls within this cycle's window (no past, no future)
-        if (row.status === "pending" || row.status === "missed") {
-          const cycleStart = row.cycle_start ?? row.due_date;
-          const cycleEnd = row.cycle_end ?? row.due_date;
-          if (cycleStart > todayStr) return false; // future cycle — not yet live
-          if (cycleEnd < todayStr) return false;   // past cycle — window closed
-        }
-        return true;
-      });
+    // For pending: only show if today falls within this cycle's window (no past, no future)
+    if (row.status === "pending" || row.status === "missed") {
+      const cycleStart = row.cycle_start ?? row.due_date;
+      const cycleEnd = row.cycle_end ?? row.due_date;
+      if (cycleStart > todayStr) return false; // future cycle — not yet live
+      if (cycleEnd < todayStr) return false;   // past cycle — window closed
+    }
+    return true;
+  });
 
   return visible.map((row): TaskRow => {
     const latestSub = (row.submissions ?? [])
