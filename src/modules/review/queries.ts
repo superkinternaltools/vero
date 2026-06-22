@@ -23,6 +23,7 @@ export type ReviewRow = {
   geofenceFlag: boolean;
   geofenceDistanceM: number | null;
   duplicateFlag: boolean;
+  noLocationFlag: boolean;
   payoutModel: string;
   payoutTiers: PayoutTier[];
 };
@@ -34,7 +35,7 @@ export async function listPendingReviews(): Promise<ReviewRow[]> {
     .select(
       `
       id, created_at, photos, comments, ai_score, ai_verdict, ai_assessment,
-      geofence_flag, geofence_distance_m, duplicate_flag,
+      geofence_flag, geofence_distance_m, duplicate_flag, no_location_flag,
       campaigns ( name, ai_score_visible, reference_images, payout_model, payout_tiers,
                   campaign_departments ( departments ( name ) ) ),
       stores ( name ),
@@ -61,6 +62,7 @@ export async function listPendingReviews(): Promise<ReviewRow[]> {
     geofenceFlag: !!row.geofence_flag,
     geofenceDistanceM: row.geofence_distance_m,
     duplicateFlag: !!row.duplicate_flag,
+    noLocationFlag: !!row.no_location_flag,
     payoutModel: row.campaigns?.payout_model ?? "binary",
     payoutTiers: row.campaigns?.payout_tiers ?? [],
   }));

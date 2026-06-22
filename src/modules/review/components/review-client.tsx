@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { X, Eye, EyeOff, MapPinOff, CopyX, ChevronLeft, ChevronRight, ZoomIn } from "lucide-react";
+import { X, Eye, EyeOff, LocateOff, MapPinOff, CopyX, ChevronLeft, ChevronRight, ZoomIn } from "lucide-react";
 import { Button } from "@/core/ui/button";
 import { cn } from "@/core/lib/utils";
 import type { ReviewRow } from "../queries";
@@ -164,7 +164,12 @@ export function ReviewClient({
                         <CopyX className="h-4 w-4 text-danger" />
                       </span>
                     )}
-                    {!r.geofenceFlag && !r.duplicateFlag && (
+                    {r.noLocationFlag && (
+                      <span title="No GPS location captured">
+                        <LocateOff className="h-4 w-4 text-muted-foreground" />
+                      </span>
+                    )}
+                    {!r.geofenceFlag && !r.duplicateFlag && !r.noLocationFlag && (
                       <span className="text-muted-foreground">—</span>
                     )}
                   </span>
@@ -265,7 +270,7 @@ export function ReviewClient({
               </div>
             </div>
 
-            {(active.geofenceFlag || active.duplicateFlag) && (
+            {(active.geofenceFlag || active.duplicateFlag || active.noLocationFlag) && (
               <div className="mt-4 space-y-1 rounded-xl border border-warning/40 bg-warning/5 p-3 text-sm">
                 {active.geofenceFlag && (
                   <p className="flex items-center gap-2 text-foreground">
@@ -278,6 +283,12 @@ export function ReviewClient({
                   <p className="flex items-center gap-2 text-foreground">
                     <CopyX className="h-4 w-4 text-danger" />
                     One or more photos match an earlier submission (possible reuse).
+                  </p>
+                )}
+                {active.noLocationFlag && (
+                  <p className="flex items-center gap-2 text-foreground">
+                    <LocateOff className="h-4 w-4 text-muted-foreground" />
+                    No GPS location was captured for this submission.
                   </p>
                 )}
               </div>

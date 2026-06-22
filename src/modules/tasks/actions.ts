@@ -123,6 +123,7 @@ export async function submitProof(input: {
       geofence_flag: geofenceFlag,
       geofence_distance_m: geofenceDistance,
       duplicate_flag: duplicateFlag,
+      no_location_flag: input.latitude == null || input.longitude == null,
       status: "pending_review",
     })
     .select("id")
