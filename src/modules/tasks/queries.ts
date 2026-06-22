@@ -41,7 +41,11 @@ export async function getMyTasks(): Promise<TaskRow[]> {
     .order("due_date", { ascending: true });
   if (!isAdmin) q = q.in("store_id", storeIds);
 
-  const { data } = await q;
+  const { data, error } = await q;
+  if (error) {
+    console.error("[getMyTasks] query failed:", error.message, error.details, error.hint);
+    return [];
+  }
   const raw = (data as any[]) ?? [];
 
   // Use IST (UTC+5:30) so the cycle window matches the Indian calendar day,
