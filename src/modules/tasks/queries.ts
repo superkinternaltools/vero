@@ -27,6 +27,12 @@ export async function getMyTasks(): Promise<TaskRow[]> {
     if (storeIds.length === 0) return [];
   }
 
+  // Use IST (UTC+5:30) so the cycle window matches the Indian calendar day,
+  // not UTC which can be a day behind between midnight–5:30 AM IST.
+  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+
+  // Filter at the DB level so we only fetch current-cycle tasks — avoids hitting
+  // Supabase's 1000-row default limit on large deployments with many past cycles.
   let q = supabase
     .from("tasks")
     .select(
@@ -38,6 +44,8 @@ export async function getMyTasks(): Promise<TaskRow[]> {
       submissions ( rejection_reason, photos, created_at )
       `,
     )
+    .lte("cycle_start", todayStr)
+    .gte("cycle_end", todayStr)
     .order("due_date", { ascending: true });
   if (!isAdmin) q = q.in("store_id", storeIds);
 
@@ -48,14 +56,6 @@ export async function getMyTasks(): Promise<TaskRow[]> {
   }
   const raw = (data as any[]) ?? [];
 
-  // Use IST (UTC+5:30) so the cycle window matches the Indian calendar day,
-  // not UTC which can be a day behind between midnight–5:30 AM IST.
-  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
-
-  console.log(`[getMyTasks] isAdmin=${isAdmin} rawCount=${raw.length} todayStr=${todayStr}`,
-    raw.slice(0, 3).map((r: any) => ({ cycle_start: r.cycle_start, cycle_end: r.cycle_end, status: r.status }))
-  );
-
   const visible = raw.filter((row) => {
     // Job title targeting — skip for admins
     if (!isAdmin) {
@@ -64,12 +64,6 @@ export async function getMyTasks(): Promise<TaskRow[]> {
       );
       if (targets.length > 0 && (!jobTitleId || !targets.includes(jobTitleId))) return false;
     }
-
-    // Only show tasks within the current cycle window — no past, no future
-    const cycleStart = row.cycle_start ?? row.due_date;
-    const cycleEnd = row.cycle_end ?? row.due_date;
-    if (cycleStart > todayStr) return false; // future cycle — not yet live
-    if (cycleEnd < todayStr) return false;   // past cycle — window closed
     return true;
   });
 
