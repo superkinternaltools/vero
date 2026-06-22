@@ -33,6 +33,8 @@ function scalars(v: CampaignFormValues) {
     skip_weekends: v.skip_weekends,
     skip_holidays: v.skip_holidays,
     skip_dates: v.skip_dates,
+    submission_window_start: v.submission_window_start || null,
+    submission_window_end: v.submission_window_end || null,
   };
 }
 

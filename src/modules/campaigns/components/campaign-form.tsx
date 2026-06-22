@@ -685,6 +685,48 @@ export function CampaignForm({
         </div>
       </Section>
 
+      <Section title="Submission window">
+        <div className="space-y-4">
+          <label className="flex cursor-pointer items-center gap-3">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-border accent-primary"
+              checked={v.submission_window_start !== null}
+              onChange={(e) => {
+                if (e.target.checked) {
+                  set("submission_window_start", "09:00");
+                  set("submission_window_end", "12:00");
+                } else {
+                  set("submission_window_start", null);
+                  set("submission_window_end", null);
+                }
+              }}
+            />
+            <span className="text-sm text-foreground">Restrict submissions to a time window (IST)</span>
+          </label>
+          {v.submission_window_start !== null && (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <label className={labelClass}>Window opens</label>
+                <Input
+                  type="time"
+                  value={v.submission_window_start ?? ""}
+                  onChange={(e) => set("submission_window_start", e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className={labelClass}>Window closes</label>
+                <Input
+                  type="time"
+                  value={v.submission_window_end ?? ""}
+                  onChange={(e) => set("submission_window_end", e.target.value)}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      </Section>
+
       {error && <p className="text-sm font-medium text-danger">{error}</p>}
 
       <div className="flex justify-end gap-2">

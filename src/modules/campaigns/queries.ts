@@ -80,5 +80,7 @@ export async function getCampaign(
     skip_weekends: row.skip_weekends,
     skip_holidays: row.skip_holidays,
     skip_dates: row.skip_dates ?? [],
+    submission_window_start: row.submission_window_start ?? null,
+    submission_window_end: row.submission_window_end ?? null,
   };
 }

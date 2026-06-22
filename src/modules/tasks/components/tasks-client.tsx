@@ -14,6 +14,7 @@ import {
   Images,
   Send,
   Search,
+  Timer,
   Trash2,
   X,
   ZoomIn,
@@ -38,6 +39,12 @@ function fmtDate(d: string) {
 
 function displayDue(t: TaskRow) {
   return fmtDate(t.frequency === "daily" ? t.dueDate : t.cycleEnd);
+}
+
+function fmtTime(t: string) {
+  const [h, m] = t.split(":").map(Number);
+  const ampm = h >= 12 ? "PM" : "AM";
+  return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${ampm}`;
 }
 
 function cycleLabel(t: TaskRow) {
@@ -326,6 +333,12 @@ export function TasksClient({
                 <Building2 className="h-3.5 w-3.5 shrink-0" />
                 <span>{t.storeName}</span>
               </div>
+              {t.windowStart && t.windowEnd && (
+                <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Timer className="h-3.5 w-3.5 shrink-0" />
+                  <span>{fmtTime(t.windowStart)} – {fmtTime(t.windowEnd)}</span>
+                </div>
+              )}
               <div className="mt-3 flex items-center justify-between">
                 <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Calendar className="h-3.5 w-3.5 shrink-0" />

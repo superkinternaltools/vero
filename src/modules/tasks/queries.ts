@@ -29,7 +29,15 @@ export async function getMyTasks(): Promise<TaskRow[]> {
 
   // Use IST (UTC+5:30) so the cycle window matches the Indian calendar day,
   // not UTC which can be a day behind between midnight–5:30 AM IST.
-  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+  const now = new Date();
+  const todayStr = now.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+  // Current IST time as "HH:MM" for submission window comparisons.
+  const istTime = now.toLocaleTimeString("en-GB", {
+    timeZone: "Asia/Kolkata",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 
   // Filter at the DB level so we only fetch current-cycle tasks — avoids hitting
   // Supabase's 1000-row default limit on large deployments with many past cycles.
@@ -39,6 +47,7 @@ export async function getMyTasks(): Promise<TaskRow[]> {
       `
       id, campaign_id, store_id, due_date, cycle_start, cycle_end, status, non_submission_reason,
       campaigns ( name, frequency, instructions, reference_images, capture_mode, num_photos,
+                  submission_window_start, submission_window_end,
                   execution_types ( name ), campaign_job_titles ( job_title_id ) ),
       stores ( name ),
       submissions ( rejection_reason, photos, created_at )
@@ -63,6 +72,13 @@ export async function getMyTasks(): Promise<TaskRow[]> {
         (x: any) => x.job_title_id,
       );
       if (targets.length > 0 && (!jobTitleId || !targets.includes(jobTitleId))) return false;
+    }
+    // Submission window — hide tasks outside their allowed time window.
+    // Already-submitted/approved/rejected tasks are always shown regardless of window.
+    const winStart: string | null = row.campaigns?.submission_window_start ?? null;
+    const winEnd: string | null = row.campaigns?.submission_window_end ?? null;
+    if (winStart && winEnd && row.status === "pending") {
+      if (istTime < winStart || istTime >= winEnd) return false;
     }
     return true;
   });
@@ -90,6 +106,8 @@ export async function getMyTasks(): Promise<TaskRow[]> {
       rejectionReason: latestSub?.rejection_reason ?? null,
       nonSubmissionReason: row.non_submission_reason ?? null,
       submittedPhotos: latestSub?.photos ?? [],
+      windowStart: row.campaigns?.submission_window_start ?? null,
+      windowEnd: row.campaigns?.submission_window_end ?? null,
     };
   });
 }

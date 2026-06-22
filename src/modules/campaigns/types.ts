@@ -34,6 +34,8 @@ export type CampaignFormValues = {
   skip_weekends: boolean;
   skip_holidays: boolean;
   skip_dates: string[];
+  submission_window_start: string | null;
+  submission_window_end: string | null;
 };
 
 export type CampaignListRow = {
@@ -76,4 +78,6 @@ export const EMPTY_CAMPAIGN: CampaignFormValues = {
   skip_weekends: false,
   skip_holidays: false,
   skip_dates: [],
+  submission_window_start: null,
+  submission_window_end: null,
 };

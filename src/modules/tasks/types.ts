@@ -25,4 +25,6 @@ export type TaskRow = {
   rejectionReason: string | null;
   nonSubmissionReason: string | null;
   submittedPhotos: string[];
+  windowStart: string | null;
+  windowEnd: string | null;
 };

@@ -70,6 +70,29 @@ export async function submitProof(input: {
 
   const supabase = await createClient();
 
+  // Enforce submission window server-side.
+  const { data: cam } = await supabase
+    .from("campaigns")
+    .select("submission_window_start, submission_window_end")
+    .eq("id", input.campaignId)
+    .maybeSingle();
+  if (cam?.submission_window_start && cam?.submission_window_end) {
+    const istTime = new Date().toLocaleTimeString("en-GB", {
+      timeZone: "Asia/Kolkata",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    if (istTime < cam.submission_window_start || istTime >= cam.submission_window_end) {
+      const fmt = (t: string) => {
+        const [h, m] = t.split(":").map(Number);
+        const ampm = h >= 12 ? "PM" : "AM";
+        return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${ampm}`;
+      };
+      return { error: `Submissions only accepted between ${fmt(cam.submission_window_start)} and ${fmt(cam.submission_window_end)} IST.` };
+    }
+  }
+
   // Integrity checks (soft flags for the reviewer — never block the upload).
   let geofenceFlag = false;
   let geofenceDistance: number | null = null;
