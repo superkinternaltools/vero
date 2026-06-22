@@ -2,7 +2,22 @@
 
 import { useEffect, useState, useTransition, type ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
-import { Camera, ClipboardList, Clock, Send, AlertTriangle, X, ZoomIn, Trash2, ChevronLeft, ChevronRight, Search } from "lucide-react";
+import {
+  Building2,
+  Calendar,
+  Camera,
+  ChevronLeft,
+  ChevronRight,
+  ClipboardList,
+  Clock,
+  AlertTriangle,
+  Images,
+  Send,
+  Search,
+  Trash2,
+  X,
+  ZoomIn,
+} from "lucide-react";
 import { Button } from "@/core/ui/button";
 import { createClient } from "@/core/db/client";
 import { cn } from "@/core/lib/utils";
@@ -22,7 +37,6 @@ function fmtDate(d: string) {
 }
 
 function displayDue(t: TaskRow) {
-  // For weekly/monthly, show the end of the cycle as the due date
   return fmtDate(t.frequency === "daily" ? t.dueDate : t.cycleEnd);
 }
 
@@ -55,7 +69,7 @@ function Pagination({ page, total, onPage }: { page: number; total: number; onPa
   const pages = Math.ceil(total / PAGE_SIZE);
   if (pages <= 1) return null;
   return (
-    <div className="flex items-center justify-between border-t border-border px-4 py-2.5">
+    <div className="mt-2 flex items-center justify-between px-1 py-2">
       <span className="text-xs text-muted-foreground">
         {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total}
       </span>
@@ -86,6 +100,15 @@ const STATUS_STYLES: Record<string, string> = {
   rejected: "bg-danger/10 text-danger",
   missed: "bg-muted text-muted-foreground",
   not_done: "bg-muted text-muted-foreground",
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  pending: "Pending",
+  submitted: "Submitted",
+  approved: "Approved",
+  rejected: "Rejected",
+  missed: "Missed",
+  not_done: "Not done",
 };
 
 export function TasksClient({
@@ -282,229 +305,183 @@ export function TasksClient({
       {/* Pending */}
       <section className="mt-8">
         <h2 className="text-sm font-semibold text-foreground">Pending Executions</h2>
-        <div className="mt-3 overflow-x-auto rounded-2xl border border-border bg-card">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <th className="px-4 py-3 font-semibold">Campaign</th>
-                <th className="hidden px-4 py-3 font-semibold sm:table-cell">Store</th>
-                <th className="px-4 py-3 font-semibold">Due</th>
-                <th className="px-4 py-3 font-semibold">Status</th>
-                <th className="px-4 py-3 text-right font-semibold">Upload</th>
-                <th className="hidden px-4 py-3 font-semibold sm:table-cell">Can&apos;t do it?</th>
-                {isAdmin && <th className="px-4 py-3 font-semibold" />}
-              </tr>
-            </thead>
-            <tbody>
-              {pPending.map((t) => (
-                <tr key={t.id} className="border-b border-border last:border-0">
-                  <td className="px-4 py-3">
-                    <span className="font-medium text-foreground">{t.campaignName}</span>
-                    <span className="mt-0.5 block text-xs text-muted-foreground sm:hidden">{t.storeName}</span>
-                  </td>
-                  <td className="hidden px-4 py-3 text-muted-foreground sm:table-cell">{t.storeName}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{displayDue(t)}</td>
-                  <td className="px-4 py-3">
-                    <span className={cn("inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium capitalize", STATUS_STYLES[t.status])}>
-                      {t.status}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex flex-col items-end gap-2">
-                      <Button size="md" onClick={() => open(t)}>Upload</Button>
-                      {/* Mobile-only can't-do-it — shown inline since the column is hidden */}
-                      <select
-                        defaultValue=""
-                        onChange={(e) => { cantDo(t, e.target.value); e.target.value = ""; }}
-                        disabled={pending}
-                        className="sm:hidden rounded-lg border border-transparent bg-input px-2 py-1.5 text-xs text-muted-foreground focus:border-primary focus:outline-none"
-                      >
-                        <option value="">Can&apos;t do it?</option>
-                        {nonSubmissionReasons.map((r) => (
-                          <option key={r.id} value={r.name}>{r.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </td>
-                  <td className="hidden px-4 py-3 sm:table-cell">
-                    <select
-                      defaultValue=""
-                      onChange={(e) => { cantDo(t, e.target.value); e.target.value = ""; }}
-                      disabled={pending}
-                      className="rounded-lg border border-transparent bg-input px-2 py-1.5 text-xs text-muted-foreground focus:border-primary focus:outline-none"
-                    >
-                      <option value="">Choose a reason…</option>
-                      {nonSubmissionReasons.map((r) => (
-                        <option key={r.id} value={r.name}>{r.name}</option>
-                      ))}
-                    </select>
-                  </td>
-                  {isAdmin && (
-                    <td className="px-4 py-3">
-                      <button
-                        type="button"
-                        onClick={() => remove(t)}
-                        disabled={pending}
-                        className="rounded-lg p-1.5 text-muted-foreground hover:bg-danger/10 hover:text-danger disabled:opacity-40"
-                        aria-label="Delete task"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </td>
-                  )}
-                </tr>
-              ))}
-              {pendingTasks.length === 0 && (
-                <tr><td colSpan={isAdmin ? 7 : 6} className="p-8 text-center text-sm text-muted-foreground">Nothing pending. 🎉</td></tr>
-              )}
-            </tbody>
-          </table>
-          <Pagination page={pendingPage} total={pendingTasks.length} onPage={setPendingPage} />
+        <div className="mt-3 space-y-3">
+          {pPending.map((t) => (
+            <div key={t.id} className="rounded-2xl border border-border bg-card p-4">
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-sm font-medium leading-snug text-foreground">{t.campaignName}</p>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => remove(t)}
+                    disabled={pending}
+                    className="shrink-0 rounded-lg p-1 text-muted-foreground hover:bg-danger/10 hover:text-danger disabled:opacity-40"
+                    aria-label="Delete task"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+              <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Building2 className="h-3.5 w-3.5 shrink-0" />
+                <span>{t.storeName}</span>
+              </div>
+              <div className="mt-3 flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Calendar className="h-3.5 w-3.5 shrink-0" />
+                  <span>{displayDue(t)}</span>
+                </div>
+                <span className={cn("inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium", STATUS_STYLES[t.status])}>
+                  {STATUS_LABELS[t.status] ?? t.status}
+                </span>
+              </div>
+              <div className="mt-3 space-y-2">
+                <Button className="w-full" size="md" onClick={() => open(t)}>
+                  <Camera className="h-4 w-4" />
+                  Upload proof
+                </Button>
+                <select
+                  defaultValue=""
+                  onChange={(e) => { cantDo(t, e.target.value); e.target.value = ""; }}
+                  disabled={pending}
+                  className="w-full rounded-xl border border-transparent bg-input px-3 py-2 text-xs text-muted-foreground focus:border-primary focus:outline-none"
+                >
+                  <option value="">Can&apos;t do it?</option>
+                  {nonSubmissionReasons.map((r) => (
+                    <option key={r.id} value={r.name}>{r.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          ))}
+          {pendingTasks.length === 0 && (
+            <div className="rounded-2xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">
+              Nothing pending. 🎉
+            </div>
+          )}
         </div>
+        <Pagination page={pendingPage} total={pendingTasks.length} onPage={setPendingPage} />
       </section>
 
       {/* Submitted — not approved */}
       <section className="mt-8">
         <h2 className="text-sm font-semibold text-foreground">Submitted — Not Approved</h2>
-        <div className="mt-3 overflow-x-auto rounded-2xl border border-border bg-card">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <th className="px-4 py-3 font-semibold">Campaign</th>
-                <th className="hidden px-4 py-3 font-semibold sm:table-cell">Store</th>
-                <th className="px-4 py-3 font-semibold">Due</th>
-                <th className="px-4 py-3 font-semibold">Status / Reason</th>
-                <th className="px-4 py-3 text-right font-semibold">&nbsp;</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pAwaiting.map((t) => (
-                <tr key={t.id} className="border-b border-border last:border-0">
-                  <td className="px-4 py-3">
-                    <span className="font-medium text-foreground">{t.campaignName}</span>
-                    <span className="mt-0.5 block text-xs text-muted-foreground sm:hidden">{t.storeName}</span>
-                  </td>
-                  <td className="hidden px-4 py-3 text-muted-foreground sm:table-cell">{t.storeName}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{displayDue(t)}</td>
-                  <td className="px-4 py-3">
-                    <span className={cn("inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium capitalize", STATUS_STYLES[t.status])}>
-                      {t.status.replace("_", " ")}
-                    </span>
-                    {t.status === "rejected" && t.rejectionReason && (
-                      <span className="ml-2 text-xs text-danger">{t.rejectionReason}</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    {t.status === "rejected" ? (
-                      <Button size="md" onClick={() => open(t)}>Re-upload</Button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setViewTask(t)}
-                        className="text-xs text-muted-foreground underline hover:text-foreground"
-                      >
-                        View
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-              {awaitingTasks.length === 0 && (
-                <tr><td colSpan={5} className="p-8 text-center text-sm text-muted-foreground">No submissions awaiting review.</td></tr>
+        <div className="mt-3 space-y-3">
+          {pAwaiting.map((t) => (
+            <div key={t.id} className="rounded-2xl border border-border bg-card p-4">
+              <p className="text-sm font-medium leading-snug text-foreground">{t.campaignName}</p>
+              <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Building2 className="h-3.5 w-3.5 shrink-0" />
+                <span>{t.storeName}</span>
+              </div>
+              <div className="mt-3 flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Calendar className="h-3.5 w-3.5 shrink-0" />
+                  <span>{displayDue(t)}</span>
+                </div>
+                <span className={cn("inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium", STATUS_STYLES[t.status])}>
+                  {STATUS_LABELS[t.status] ?? t.status}
+                </span>
+              </div>
+              {t.status === "rejected" && t.rejectionReason && (
+                <div className="mt-3 rounded-xl border border-danger/30 bg-danger/5 p-3">
+                  <p className="text-xs font-medium text-danger">{t.rejectionReason}</p>
+                </div>
               )}
-            </tbody>
-          </table>
-          <Pagination page={awaitingPage} total={awaitingTasks.length} onPage={setAwaitingPage} />
-        </div>
-      </section>
-
-      {/* Approved */}
-      <section className="mt-8">
-        <h2 className="text-sm font-semibold text-foreground">Submitted — Approved</h2>
-        <div className="mt-3 overflow-x-auto rounded-2xl border border-border bg-card">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <th className="px-4 py-3 font-semibold">Campaign</th>
-                <th className="hidden px-4 py-3 font-semibold sm:table-cell">Store</th>
-                <th className="px-4 py-3 font-semibold">Due</th>
-                <th className="px-4 py-3 font-semibold">Status</th>
-                <th className="px-4 py-3 text-right font-semibold">&nbsp;</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pApproved.map((t) => (
-                <tr key={t.id} className="border-b border-border last:border-0">
-                  <td className="px-4 py-3">
-                    <span className="font-medium text-foreground">{t.campaignName}</span>
-                    <span className="mt-0.5 block text-xs text-muted-foreground sm:hidden">{t.storeName}</span>
-                  </td>
-                  <td className="hidden px-4 py-3 text-muted-foreground sm:table-cell">{t.storeName}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{displayDue(t)}</td>
-                  <td className="px-4 py-3">
-                    <button
-                      type="button"
-                      onClick={() => setViewTask(t)}
-                      className={cn("inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium capitalize underline-offset-2 hover:underline", STATUS_STYLES[t.status])}
-                    >
-                      {t.status}
-                    </button>
-                  </td>
-                  <td className="px-4 py-3 text-right">
+              <div className="mt-3">
+                {t.status === "rejected" ? (
+                  <Button variant="outline" className="w-full" size="md" onClick={() => open(t)}>
+                    Re-upload
+                  </Button>
+                ) : (
+                  <div className="text-center">
                     <button
                       type="button"
                       onClick={() => setViewTask(t)}
                       className="text-xs text-muted-foreground underline hover:text-foreground"
                     >
-                      View
+                      View submitted photo
                     </button>
-                  </td>
-                </tr>
-              ))}
-              {approvedTasks.length === 0 && (
-                <tr><td colSpan={5} className="p-8 text-center text-sm text-muted-foreground">No approved executions yet.</td></tr>
-              )}
-            </tbody>
-          </table>
-          <Pagination page={approvedPage} total={approvedTasks.length} onPage={setApprovedPage} />
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+          {awaitingTasks.length === 0 && (
+            <div className="rounded-2xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">
+              No submissions awaiting review.
+            </div>
+          )}
         </div>
+        <Pagination page={awaitingPage} total={awaitingTasks.length} onPage={setAwaitingPage} />
+      </section>
+
+      {/* Approved */}
+      <section className="mt-8">
+        <h2 className="text-sm font-semibold text-foreground">Submitted — Approved</h2>
+        <div className="mt-3 space-y-3">
+          {pApproved.map((t) => (
+            <div key={t.id} className="rounded-2xl border border-border bg-card p-4">
+              <p className="text-sm font-medium leading-snug text-foreground">{t.campaignName}</p>
+              <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Building2 className="h-3.5 w-3.5 shrink-0" />
+                <span>{t.storeName}</span>
+              </div>
+              <div className="mt-3 flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Calendar className="h-3.5 w-3.5 shrink-0" />
+                  <span>{displayDue(t)}</span>
+                </div>
+                <span className={cn("inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium", STATUS_STYLES[t.status])}>
+                  {STATUS_LABELS[t.status] ?? t.status}
+                </span>
+              </div>
+              <div className="mt-3 text-center">
+                <button
+                  type="button"
+                  onClick={() => setViewTask(t)}
+                  className="text-xs text-muted-foreground underline hover:text-foreground"
+                >
+                  View submitted photo
+                </button>
+              </div>
+            </div>
+          ))}
+          {approvedTasks.length === 0 && (
+            <div className="rounded-2xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">
+              No approved executions yet.
+            </div>
+          )}
+        </div>
+        <Pagination page={approvedPage} total={approvedTasks.length} onPage={setApprovedPage} />
       </section>
 
       {/* Not done */}
       {notDoneTasks.length > 0 && (
         <section className="mt-8">
           <h2 className="text-sm font-semibold text-foreground">Closed — Not Done</h2>
-          <div className="mt-3 overflow-x-auto rounded-2xl border border-border bg-card">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-                  <th className="px-4 py-3 font-semibold">Campaign</th>
-                  <th className="hidden px-4 py-3 font-semibold sm:table-cell">Store</th>
-                  <th className="px-4 py-3 font-semibold">Due</th>
-                  <th className="px-4 py-3 font-semibold">Status / Reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                {notDoneTasks.map((t) => (
-                  <tr key={t.id} className="border-b border-border last:border-0">
-                    <td className="px-4 py-3">
-                      <span className="font-medium text-foreground">{t.campaignName}</span>
-                      <span className="mt-0.5 block text-xs text-muted-foreground sm:hidden">{t.storeName}</span>
-                    </td>
-                    <td className="hidden px-4 py-3 text-muted-foreground sm:table-cell">{t.storeName}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{displayDue(t)}</td>
-                    <td className="px-4 py-3">
-                      <span className={cn("inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium", STATUS_STYLES.not_done)}>
-                        Not done
-                      </span>
-                      {t.nonSubmissionReason && (
-                        <span className="ml-2 text-xs text-muted-foreground">{t.nonSubmissionReason}</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="mt-3 space-y-3">
+            {notDoneTasks.map((t) => (
+              <div key={t.id} className="rounded-2xl border border-border bg-card p-4">
+                <p className="text-sm font-medium leading-snug text-foreground">{t.campaignName}</p>
+                <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Building2 className="h-3.5 w-3.5 shrink-0" />
+                  <span>{t.storeName}</span>
+                </div>
+                <div className="mt-3 flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Calendar className="h-3.5 w-3.5 shrink-0" />
+                    <span>{displayDue(t)}</span>
+                  </div>
+                  <span className={cn("inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium", STATUS_STYLES.not_done)}>
+                    Not done
+                  </span>
+                </div>
+                {t.nonSubmissionReason && (
+                  <p className="mt-2 text-xs text-muted-foreground">{t.nonSubmissionReason}</p>
+                )}
+              </div>
+            ))}
           </div>
         </section>
       )}
@@ -523,7 +500,6 @@ export function TasksClient({
               </button>
             </div>
 
-            {/* Show rejection reason prominently for re-uploads */}
             {active.status === "rejected" && active.rejectionReason && (
               <div className="mb-4 rounded-xl border border-danger/30 bg-danger/5 p-3">
                 <p className="text-sm font-medium text-danger">Rejected: {active.rejectionReason}</p>
@@ -585,14 +561,28 @@ export function TasksClient({
                     type="file"
                     accept="image/*"
                     multiple={active.numPhotos > 1}
-                    {...(active.captureMode === "camera" ? { capture: "environment" } : {})}
+                    capture="environment"
                     className="hidden"
                     onChange={onFiles}
                     disabled={uploading}
                   />
                   <Camera className="h-4 w-4" />
-                  {uploading ? "Uploading…" : `Add photo${active.numPhotos > 1 ? `s (up to ${active.numPhotos})` : ""}`}
+                  {uploading ? "Uploading…" : "Take photo"}
                 </label>
+                {active.captureMode !== "camera" && (
+                  <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground hover:bg-muted">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple={active.numPhotos > 1}
+                      className="hidden"
+                      onChange={onFiles}
+                      disabled={uploading}
+                    />
+                    <Images className="h-4 w-4" />
+                    Choose from gallery
+                  </label>
+                )}
                 <span className="text-xs text-muted-foreground">
                   {coords.lat ? "📍 Location captured" : "📍 Location pending…"}
                 </span>

@@ -111,6 +111,7 @@ export function ReviewClient({
             <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
               <th className="px-4 py-3 font-semibold">Campaign</th>
               <th className="px-4 py-3 font-semibold">Store</th>
+              <th className="px-4 py-3 font-semibold">Uploaded by</th>
               <th className="px-4 py-3 font-semibold">Department</th>
               <th className="px-4 py-3 font-semibold">AI Score</th>
               <th className="px-4 py-3 font-semibold">AI Verdict</th>
@@ -124,6 +125,7 @@ export function ReviewClient({
               <tr key={r.id} className="border-b border-border last:border-0">
                 <td className="px-4 py-3 font-medium text-foreground">{r.campaignName}</td>
                 <td className="px-4 py-3 text-muted-foreground">{r.storeName}</td>
+                <td className="px-4 py-3 text-muted-foreground">{r.submittedByName ?? "—"}</td>
                 <td className="px-4 py-3 text-muted-foreground">{r.departmentName ?? "—"}</td>
                 <td className="px-4 py-3 text-muted-foreground">
                   {(isAdmin || r.aiScoreVisible) && r.aiScore != null ? `${r.aiScore}/10` : "—"}
@@ -177,7 +179,7 @@ export function ReviewClient({
             ))}
             {reviews.length === 0 && (
               <tr>
-                <td colSpan={8} className="p-10 text-center text-sm text-muted-foreground">
+                <td colSpan={9} className="p-10 text-center text-sm text-muted-foreground">
                   Nothing to review right now. 🎉
                 </td>
               </tr>
@@ -194,7 +196,7 @@ export function ReviewClient({
               <div className="min-w-0">
                 <h2 className="truncate text-lg font-semibold text-foreground">{active.campaignName}</h2>
                 <p className="truncate text-sm text-muted-foreground">
-                  {active.storeName} · {fmt(active.submittedAt)}
+                  {active.storeName} · {active.submittedByName ?? "Unknown"} · {fmt(active.submittedAt)}
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-1">

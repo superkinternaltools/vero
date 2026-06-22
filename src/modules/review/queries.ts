@@ -11,6 +11,7 @@ export type ReviewRow = {
   campaignName: string;
   storeName: string;
   departmentName: string | null;
+  submittedByName: string | null;
   submittedAt: string;
   aiScore: number | null;
   aiVerdict: string | null;
@@ -36,7 +37,8 @@ export async function listPendingReviews(): Promise<ReviewRow[]> {
       geofence_flag, geofence_distance_m, duplicate_flag,
       campaigns ( name, ai_score_visible, reference_images, payout_model, payout_tiers,
                   campaign_departments ( departments ( name ) ) ),
-      stores ( name )
+      stores ( name ),
+      submitter:submitted_by ( display_name, email )
       `,
     )
     .eq("status", "pending_review")
@@ -47,6 +49,7 @@ export async function listPendingReviews(): Promise<ReviewRow[]> {
     campaignName: row.campaigns?.name ?? "—",
     storeName: row.stores?.name ?? "—",
     departmentName: row.campaigns?.campaign_departments?.[0]?.departments?.name ?? null,
+    submittedByName: row.submitter?.display_name ?? row.submitter?.email ?? null,
     submittedAt: row.created_at,
     aiScore: row.ai_score,
     aiVerdict: row.ai_verdict,
