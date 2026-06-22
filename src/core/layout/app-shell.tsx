@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 import { Sidebar } from "./sidebar";
-import { signOutAction } from "@/modules/auth/actions";
-import { LogOut } from "lucide-react";
+import { MobileNav } from "./mobile-nav";
 
 export function AppShell({
   displayName,
@@ -24,15 +23,7 @@ export function AppShell({
           <span className="text-lg font-bold tracking-tight text-foreground">
             Vero<span className="text-primary">.</span>
           </span>
-          <form action={signOutAction}>
-            <button
-              type="submit"
-              aria-label="Sign out"
-              className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
-            >
-              <LogOut className="h-4 w-4" />
-            </button>
-          </form>
+          <MobileNav allowed={allowed} displayName={displayName} email={email} />
         </header>
 
         <main className="flex-1 overflow-x-hidden">
