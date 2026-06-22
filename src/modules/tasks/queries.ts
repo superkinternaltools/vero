@@ -52,6 +52,10 @@ export async function getMyTasks(): Promise<TaskRow[]> {
   // not UTC which can be a day behind between midnight–5:30 AM IST.
   const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 
+  console.log(`[getMyTasks] isAdmin=${isAdmin} rawCount=${raw.length} todayStr=${todayStr}`,
+    raw.slice(0, 3).map((r: any) => ({ cycle_start: r.cycle_start, cycle_end: r.cycle_end, status: r.status }))
+  );
+
   const visible = raw.filter((row) => {
     // Job title targeting — skip for admins
     if (!isAdmin) {
