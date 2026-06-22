@@ -247,7 +247,7 @@ export function TasksClient({
             className="w-full rounded-xl border border-transparent bg-input py-2.5 pl-9 pr-4 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
           />
         </div>
-        {isAdmin && (
+        {uniqueStores.length > 1 && (
           <select
             value={storeFilter}
             onChange={(e) => { setStoreFilter(e.target.value); setPendingPage(1); }}
@@ -298,7 +298,10 @@ export function TasksClient({
             <tbody>
               {pPending.map((t) => (
                 <tr key={t.id} className="border-b border-border last:border-0">
-                  <td className="px-4 py-3 font-medium text-foreground">{t.campaignName}</td>
+                  <td className="px-4 py-3">
+                    <span className="font-medium text-foreground">{t.campaignName}</span>
+                    <span className="mt-0.5 block text-xs text-muted-foreground sm:hidden">{t.storeName}</span>
+                  </td>
                   <td className="hidden px-4 py-3 text-muted-foreground sm:table-cell">{t.storeName}</td>
                   <td className="px-4 py-3 text-muted-foreground">{displayDue(t)}</td>
                   <td className="px-4 py-3">
@@ -377,7 +380,10 @@ export function TasksClient({
             <tbody>
               {pAwaiting.map((t) => (
                 <tr key={t.id} className="border-b border-border last:border-0">
-                  <td className="px-4 py-3 font-medium text-foreground">{t.campaignName}</td>
+                  <td className="px-4 py-3">
+                    <span className="font-medium text-foreground">{t.campaignName}</span>
+                    <span className="mt-0.5 block text-xs text-muted-foreground sm:hidden">{t.storeName}</span>
+                  </td>
                   <td className="hidden px-4 py-3 text-muted-foreground sm:table-cell">{t.storeName}</td>
                   <td className="px-4 py-3 text-muted-foreground">{displayDue(t)}</td>
                   <td className="px-4 py-3">
@@ -429,7 +435,10 @@ export function TasksClient({
             <tbody>
               {pApproved.map((t) => (
                 <tr key={t.id} className="border-b border-border last:border-0">
-                  <td className="px-4 py-3 font-medium text-foreground">{t.campaignName}</td>
+                  <td className="px-4 py-3">
+                    <span className="font-medium text-foreground">{t.campaignName}</span>
+                    <span className="mt-0.5 block text-xs text-muted-foreground sm:hidden">{t.storeName}</span>
+                  </td>
                   <td className="hidden px-4 py-3 text-muted-foreground sm:table-cell">{t.storeName}</td>
                   <td className="px-4 py-3 text-muted-foreground">{displayDue(t)}</td>
                   <td className="px-4 py-3">
@@ -478,7 +487,10 @@ export function TasksClient({
               <tbody>
                 {notDoneTasks.map((t) => (
                   <tr key={t.id} className="border-b border-border last:border-0">
-                    <td className="px-4 py-3 font-medium text-foreground">{t.campaignName}</td>
+                    <td className="px-4 py-3">
+                      <span className="font-medium text-foreground">{t.campaignName}</span>
+                      <span className="mt-0.5 block text-xs text-muted-foreground sm:hidden">{t.storeName}</span>
+                    </td>
                     <td className="hidden px-4 py-3 text-muted-foreground sm:table-cell">{t.storeName}</td>
                     <td className="px-4 py-3 text-muted-foreground">{displayDue(t)}</td>
                     <td className="px-4 py-3">
