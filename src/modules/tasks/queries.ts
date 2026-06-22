@@ -44,8 +44,9 @@ export async function getMyTasks(): Promise<TaskRow[]> {
   const { data } = await q;
   const raw = (data as any[]) ?? [];
 
-  const now = new Date();
-  const todayStr = now.toISOString().split("T")[0];
+  // Use IST (UTC+5:30) so the cycle window matches the Indian calendar day,
+  // not UTC which can be a day behind between midnight–5:30 AM IST.
+  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 
   const visible = raw.filter((row) => {
     // Job title targeting — skip for admins
