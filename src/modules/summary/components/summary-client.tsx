@@ -53,7 +53,10 @@ function cellDisplay(
   // AI scored but no human verdict yet — show AI verdict with indicator
   if (c.aiVerdict) {
     const matchedTier = payoutTiers.find((t) => t.label === c.aiVerdict);
-    const isApproved = matchedTier ? matchedTier.pct > 0 : c.aiVerdict === "approved";
+    if (matchedTier) {
+      return { label: c.aiVerdict, cls: tierColor(payoutTiers, c.aiVerdict), aiOnly: true };
+    }
+    const isApproved = c.aiVerdict === "approved";
     return {
       label: isApproved ? "Appr" : "Rej",
       cls: isApproved ? "bg-success/15 text-success" : "bg-danger/15 text-danger",
@@ -858,7 +861,7 @@ export function SummaryClient({
                       (matrix?.payoutTiers ?? []).map((t) => (
                         <Button
                           key={t.label}
-                          variant={t.pct > 0 ? "default" : "outline"}
+                          variant={t.pct > 0 ? "primary" : "outline"}
                           size="md"
                           onClick={() => chooseTier(t)}
                           disabled={pending}
