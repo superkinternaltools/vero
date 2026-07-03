@@ -20,7 +20,6 @@ import {
   bulkApproveUsers,
   bulkSetRole,
   bulkSetDepartment,
-  bulkSetStores,
 } from "../actions";
 import { BulkUploadModal } from "./bulk-upload-modal";
 
@@ -114,7 +113,10 @@ export function UsersClient({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkRoleId, setBulkRoleId] = useState("");
   const [bulkDeptId, setBulkDeptId] = useState("");
-  const [bulkStoreIds, setBulkStoreIds] = useState<string[]>([]);
+
+  // ── Bulk map-to-shell modal ────────────────────────────────────────────────
+  const [bulkMapOpen, setBulkMapOpen] = useState(false);
+  const [bulkMappings, setBulkMappings] = useState<Record<string, string>>({}); // userId → shellId
 
   function toggleSelect(id: string) {
     setSelectedIds((prev) => {
@@ -134,7 +136,7 @@ export function UsersClient({
     setSelectedIds(new Set());
     setBulkRoleId("");
     setBulkDeptId("");
-    setBulkStoreIds([]);
+    setBulkMappings({});
   }
 
   function bulkApprove() {
@@ -167,14 +169,29 @@ export function UsersClient({
     });
   }
 
-  function applyBulkStores() {
-    if (!bulkStoreIds.length) return;
+  function openBulkMap() {
+    setBulkMappings({});
+    setBulkMapOpen(true);
+  }
+
+  function confirmBulkMap() {
+    const pairs = Object.entries(bulkMappings).filter(([, shellId]) => shellId);
+    if (!pairs.length) return;
     startTransition(async () => {
-      await bulkSetStores(Array.from(selectedIds), bulkStoreIds);
+      for (const [userId, shellId] of pairs) {
+        await mapUserToShell(userId, shellId);
+      }
+      setBulkMapOpen(false);
       clearSelection();
       router.refresh();
     });
   }
+
+  const selectedPendingUsers = users.filter(
+    (u) => selectedIds.has(u.id) && u.status === "pending",
+  );
+
+  const bulkMappingCount = Object.values(bulkMappings).filter(Boolean).length;
 
   const selectedPendingCount = users.filter(
     (u) => selectedIds.has(u.id) && u.status === "pending",
@@ -904,21 +921,12 @@ export function UsersClient({
               )}
             </div>
 
-            <div className="flex items-center gap-1.5">
-              <div className="w-56">
-                <MultiSelect
-                  options={stores.map((s) => ({ id: s.id, label: s.label }))}
-                  selected={bulkStoreIds}
-                  onChange={setBulkStoreIds}
-                  placeholder="Set stores…"
-                />
-              </div>
-              {bulkStoreIds.length > 0 && (
-                <Button size="md" onClick={applyBulkStores} disabled={pending}>
-                  Apply
-                </Button>
-              )}
-            </div>
+            {selectedPendingCount > 0 && shellUsers.length > 0 && (
+              <Button variant="outline" size="md" onClick={openBulkMap} disabled={pending}>
+                <Link2 className="h-4 w-4" />
+                Map to shell ({selectedPendingCount})
+              </Button>
+            )}
 
             <button
               onClick={clearSelection}
@@ -930,6 +938,83 @@ export function UsersClient({
           </div>
         </div>
       )}
+
+      {/* ── Bulk map-to-shell modal ── */}
+      <Modal
+        open={bulkMapOpen}
+        onClose={() => setBulkMapOpen(false)}
+        title="Map users to shell profiles"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Pick a matching shell profile for each user. Users left on &ldquo;Skip&rdquo; won&apos;t
+            be changed.
+          </p>
+
+          <div className="max-h-96 overflow-y-auto space-y-3 pr-0.5">
+            {selectedPendingUsers.map((u) => {
+              const sortedShellOpts = [...shellUsers]
+                .map((s) => ({
+                  ...s,
+                  score: fuzzyScore(u.display_name ?? u.email, s.display_name),
+                }))
+                .sort((a, b) => b.score - a.score);
+
+              return (
+                <div
+                  key={u.id}
+                  className="flex flex-col gap-1.5 rounded-xl border border-border bg-muted/40 px-4 py-3"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-medium text-foreground">
+                        {u.display_name ?? "—"}
+                      </p>
+                      <p className="text-xs text-muted-foreground">{u.email}</p>
+                    </div>
+                    {bulkMappings[u.id] && (
+                      <span className="rounded-full bg-success/10 px-2 py-0.5 text-xs font-medium text-success">
+                        Will map
+                      </span>
+                    )}
+                  </div>
+                  <select
+                    value={bulkMappings[u.id] ?? ""}
+                    onChange={(e) =>
+                      setBulkMappings((prev) => ({ ...prev, [u.id]: e.target.value }))
+                    }
+                    className={selectClass}
+                  >
+                    <option value="">Skip this user</option>
+                    {sortedShellOpts.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.display_name}
+                        {s.score >= 40 ? " ✓" : ""}
+                        {s.roleName ? ` · ${s.roleName}` : ""}
+                        {s.storeLabels.length > 0 ? ` · ${s.storeLabels.length} stores` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <p className="text-sm text-muted-foreground">
+              {bulkMappingCount} of {selectedPendingUsers.length} users will be mapped
+            </p>
+            <div className="flex gap-2">
+              <Button variant="outline" size="md" onClick={() => setBulkMapOpen(false)}>
+                Cancel
+              </Button>
+              <Button size="md" onClick={confirmBulkMap} disabled={!bulkMappingCount || pending}>
+                {pending ? "Mapping…" : `Map ${bulkMappingCount} user${bulkMappingCount !== 1 ? "s" : ""}`}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Modal>
 
       {/* ── Bulk upload modal ── */}
       <BulkUploadModal
