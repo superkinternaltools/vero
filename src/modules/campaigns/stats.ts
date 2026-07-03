@@ -14,6 +14,10 @@ export type CampaignHealthRow = {
   endDate: string | null;
   submissionPctWeek: number;
   submissionPctMonth: number;
+  weekSubmitted: number;
+  weekTotal: number;
+  monthSubmitted: number;
+  monthTotal: number;
   nonRejectionPct: number;
   payoutCommitted: number;
   healthWeek: Health;
@@ -155,6 +159,10 @@ export async function getCampaignHealthRows(): Promise<CampaignHealthRow[]> {
       endDate: c.end_date ?? null,
       submissionPctWeek,
       submissionPctMonth,
+      weekSubmitted,
+      weekTotal: weekTasks.length,
+      monthSubmitted,
+      monthTotal: monthTasks.length,
       nonRejectionPct: pct(reviewed - rejected, reviewed),
       payoutCommitted: c.payout_enabled ? approvedCycles * Number(c.payout_amount) : 0,
       healthWeek: healthOf(submissionPctWeek, weekTasks.length > 0, t),

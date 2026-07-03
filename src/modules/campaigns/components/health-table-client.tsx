@@ -213,7 +213,14 @@ export function HealthTableClient({ rows }: { rows: CampaignHealthRow[] }) {
                         : "text-muted-foreground",
                   )}
                 >
-                  {health(r) === "no_data" ? "—" : `${submissionPct(r)}%`}
+                  {health(r) === "no_data" ? "—" : (
+                    <>
+                      {submissionPct(r)}%
+                      <span className="ml-1 text-xs text-muted-foreground">
+                        ({window === "week" ? `${r.weekSubmitted}/${r.weekTotal}` : `${r.monthSubmitted}/${r.monthTotal}`})
+                      </span>
+                    </>
+                  )}
                 </td>
                 <td className="px-4 py-3 text-muted-foreground">
                   {health(r) === "no_data" ? "—" : `${r.nonRejectionPct}%`}
