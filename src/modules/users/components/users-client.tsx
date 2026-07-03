@@ -20,6 +20,7 @@ import {
   bulkApproveUsers,
   bulkSetRole,
   bulkSetDepartment,
+  bulkSetStores,
 } from "../actions";
 import { BulkUploadModal } from "./bulk-upload-modal";
 
@@ -113,6 +114,7 @@ export function UsersClient({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkRoleId, setBulkRoleId] = useState("");
   const [bulkDeptId, setBulkDeptId] = useState("");
+  const [bulkStoreIds, setBulkStoreIds] = useState<string[]>([]);
 
   function toggleSelect(id: string) {
     setSelectedIds((prev) => {
@@ -132,6 +134,7 @@ export function UsersClient({
     setSelectedIds(new Set());
     setBulkRoleId("");
     setBulkDeptId("");
+    setBulkStoreIds([]);
   }
 
   function bulkApprove() {
@@ -159,6 +162,15 @@ export function UsersClient({
     if (!bulkDeptId) return;
     startTransition(async () => {
       await bulkSetDepartment(Array.from(selectedIds), bulkDeptId);
+      clearSelection();
+      router.refresh();
+    });
+  }
+
+  function applyBulkStores() {
+    if (!bulkStoreIds.length) return;
+    startTransition(async () => {
+      await bulkSetStores(Array.from(selectedIds), bulkStoreIds);
       clearSelection();
       router.refresh();
     });
@@ -887,6 +899,22 @@ export function UsersClient({
               </select>
               {bulkDeptId && (
                 <Button size="md" onClick={applyBulkDept} disabled={pending}>
+                  Apply
+                </Button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <div className="w-56">
+                <MultiSelect
+                  options={stores.map((s) => ({ id: s.id, label: s.label }))}
+                  selected={bulkStoreIds}
+                  onChange={setBulkStoreIds}
+                  placeholder="Set stores…"
+                />
+              </div>
+              {bulkStoreIds.length > 0 && (
+                <Button size="md" onClick={applyBulkStores} disabled={pending}>
                   Apply
                 </Button>
               )}

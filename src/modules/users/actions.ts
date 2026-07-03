@@ -59,6 +59,20 @@ export async function bulkSetDepartment(ids: string[], departmentId: string): Pr
   return {};
 }
 
+export async function bulkSetStores(ids: string[], storeIds: string[]): Promise<Result> {
+  if (!ids.length) return {};
+  const me = await getCurrentProfile();
+  if (!me?.is_admin) return { error: "Not authorized." };
+  const supabase = await createClient();
+  await supabase.from("user_stores").delete().in("user_id", ids);
+  if (storeIds.length)
+    await supabase
+      .from("user_stores")
+      .insert(ids.flatMap((user_id) => storeIds.map((store_id) => ({ user_id, store_id }))));
+  revalidatePath("/users");
+  return {};
+}
+
 export async function updateUser(
   id: string,
   values: {
