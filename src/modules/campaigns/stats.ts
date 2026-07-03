@@ -114,7 +114,12 @@ export async function getCampaignHealthRows(): Promise<CampaignHealthRow[]> {
       )
       .is("deleted_at", null)
       .order("created_at", { ascending: false }),
-    admin.from("tasks").select("campaign_id, status, due_date").limit(10000),
+    admin
+      .from("tasks")
+      .select("campaign_id, status, due_date")
+      .gte("due_date", monthStart)
+      .lte("due_date", monthEnd)
+      .limit(10000),
     admin.from("submissions").select("campaign_id, human_verdict, status").limit(10000),
   ]);
 
