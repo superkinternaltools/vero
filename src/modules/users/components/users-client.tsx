@@ -888,6 +888,7 @@ export function UsersClient({
                   selected={bulkRoleIds}
                   onChange={setBulkRoleIds}
                   placeholder="Set roles…"
+                  dropUp
                 />
               </div>
               {bulkRoleIds.length > 0 && (
@@ -904,6 +905,7 @@ export function UsersClient({
                   selected={bulkDeptIds}
                   onChange={setBulkDeptIds}
                   placeholder="Set departments…"
+                  dropUp
                 />
               </div>
               {bulkDeptIds.length > 0 && (

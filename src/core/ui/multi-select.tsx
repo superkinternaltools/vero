@@ -16,6 +16,7 @@ export function MultiSelect({
   placeholder = "Select…",
   emptyText = "No options",
   searchPlaceholder = "Search…",
+  dropUp = false,
 }: {
   options: MSOption[];
   selected: string[];
@@ -23,6 +24,7 @@ export function MultiSelect({
   placeholder?: string;
   emptyText?: string;
   searchPlaceholder?: string;
+  dropUp?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -109,7 +111,7 @@ export function MultiSelect({
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} aria-hidden />
-          <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-xl border border-border bg-card shadow-lg">
+          <div className={cn("absolute z-20 w-full overflow-hidden rounded-xl border border-border bg-card shadow-lg", dropUp ? "bottom-full mb-1" : "mt-1")}>
             {/* Search row */}
             <div className="flex items-center gap-2 border-b border-border px-3 py-2">
               <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
