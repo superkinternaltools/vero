@@ -18,12 +18,15 @@ const HEALTH_OPTS: { value: string; label: string }[] = [
 
 const today = new Date().toISOString().split("T")[0];
 
+type Window = "week" | "month";
+
 export function HealthTableClient({ rows }: { rows: CampaignHealthRow[] }) {
   const [search, setSearch] = useState("");
   const [healthFilter, setHealthFilter] = useState<Health | "">("");
   const [campaignIds, setCampaignIds] = useState<string[]>([]);
   const [deptFilter, setDeptFilter] = useState("");
   const [activeOnly, setActiveOnly] = useState(false);
+  const [window, setWindow] = useState<Window>("week");
 
   // Build department options from all rows
   const deptOptions = useMemo(() => {
@@ -45,10 +48,15 @@ export function HealthTableClient({ rows }: { rows: CampaignHealthRow[] }) {
     [rows],
   );
 
+  const submissionPct = (r: CampaignHealthRow) =>
+    window === "week" ? r.submissionPctWeek : r.submissionPctMonth;
+  const health = (r: CampaignHealthRow) =>
+    window === "week" ? r.healthWeek : r.healthMonth;
+
   const filtered = rows.filter((r) => {
     if (campaignIds.length > 0 && !campaignIds.includes(r.id)) return false;
     if (search && !r.name.toLowerCase().includes(search.toLowerCase())) return false;
-    if (healthFilter && r.health !== healthFilter) return false;
+    if (healthFilter && health(r) !== healthFilter) return false;
     if (deptFilter && !r.departmentNames.includes(deptFilter)) return false;
     if (activeOnly) {
       if (!r.startDate || !r.endDate) return false;
@@ -73,6 +81,25 @@ export function HealthTableClient({ rows }: { rows: CampaignHealthRow[] }) {
         <h2 className="text-sm font-semibold text-foreground">Campaign health</h2>
 
         <div className="flex flex-wrap items-center gap-2">
+          {/* Week / Month toggle */}
+          <div className="flex rounded-xl border border-border bg-input p-0.5 text-sm">
+            {(["week", "month"] as Window[]).map((w) => (
+              <button
+                key={w}
+                type="button"
+                onClick={() => setWindow(w)}
+                className={cn(
+                  "rounded-lg px-3 py-1.5 font-medium capitalize transition-colors",
+                  window === w
+                    ? "bg-card text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {w === "week" ? "This Week" : "This Month"}
+              </button>
+            ))}
+          </div>
+
           {/* Campaign multi-select */}
           <div className="w-56">
             <MultiSelect
@@ -178,24 +205,24 @@ export function HealthTableClient({ rows }: { rows: CampaignHealthRow[] }) {
                 <td
                   className={cn(
                     "px-4 py-3",
-                    r.submissionPct === 0 && r.health === "no_data"
+                    health(r) === "no_data"
                       ? "text-muted-foreground"
-                      : r.submissionPct < 50
+                      : submissionPct(r) < 50
                         ? "text-danger"
                         : "text-muted-foreground",
                   )}
                 >
-                  {r.health === "no_data" ? "—" : `${r.submissionPct}%`}
+                  {health(r) === "no_data" ? "—" : `${submissionPct(r)}%`}
                 </td>
                 <td className="px-4 py-3 text-muted-foreground">
-                  {r.health === "no_data" ? "—" : `${r.nonRejectionPct}%`}
+                  {health(r) === "no_data" ? "—" : `${r.nonRejectionPct}%`}
                 </td>
                 <td className="px-4 py-3 text-muted-foreground">
                   ₹{r.payoutCommitted.toLocaleString("en-IN")}
                 </td>
                 <td className="px-4 py-3">
                   <Link href={`/campaigns/${r.id}`}>
-                    <HealthBadge health={r.health} />
+                    <HealthBadge health={health(r)} />
                   </Link>
                 </td>
               </tr>
@@ -211,7 +238,7 @@ export function HealthTableClient({ rows }: { rows: CampaignHealthRow[] }) {
         </table>
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
-        Submission % counts only tasks due on or before today. Click a row for the detailed view.
+        Submission % is based on tasks due within the selected window. Click a row for the detailed view.
       </p>
     </section>
   );

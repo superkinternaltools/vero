@@ -11,10 +11,12 @@ export type CampaignHealthRow = {
   departmentNames: string[];
   startDate: string | null;
   endDate: string | null;
-  submissionPct: number;
+  submissionPctWeek: number;
+  submissionPctMonth: number;
   nonRejectionPct: number;
   payoutCommitted: number;
-  health: Health;
+  healthWeek: Health;
+  healthMonth: Health;
 };
 
 export type StoreBreakdownRow = {
@@ -66,10 +68,38 @@ function healthOf(submissionPct: number, hasTasks: boolean, t: { onTrack: number
   return "critical";
 }
 
+function currentWeekWindow(): { weekStart: string; weekEnd: string } {
+  const now = new Date();
+  const day = now.getDate();
+  const weekNum = day <= 7 ? 1 : day <= 14 ? 2 : day <= 21 ? 3 : 4;
+  const startDay = (weekNum - 1) * 7 + 1; // 1, 8, 15, 22
+  const lastOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const endDay = weekNum === 4 ? lastOfMonth : weekNum * 7; // 7, 14, 21, last
+  const fmt = (d: Date) => d.toISOString().split("T")[0];
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  return {
+    weekStart: fmt(new Date(y, m, startDay)),
+    weekEnd: fmt(new Date(y, m, endDay)),
+  };
+}
+
+function currentMonthWindow(): { monthStart: string; monthEnd: string } {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const fmt = (d: Date) => d.toISOString().split("T")[0];
+  return {
+    monthStart: fmt(new Date(y, m, 1)),
+    monthEnd: fmt(new Date(y, m + 1, 0)),
+  };
+}
+
 export async function getCampaignHealthRows(): Promise<CampaignHealthRow[]> {
   const supabase = await createClient();
   const t = await getThresholds();
-  const today = new Date().toISOString().split("T")[0];
+  const { weekStart, weekEnd } = currentWeekWindow();
+  const { monthStart, monthEnd } = currentMonthWindow();
 
   const [{ data: campaigns }, { data: tasks }, { data: subs }] = await Promise.all([
     supabase
@@ -85,20 +115,24 @@ export async function getCampaignHealthRows(): Promise<CampaignHealthRow[]> {
 
   const T = (tasks as any[]) ?? [];
   const S = (subs as any[]) ?? [];
+  const SUBMITTED = ["submitted", "approved", "rejected"];
 
   return ((campaigns as any[]) ?? []).map((c) => {
     const ct = T.filter((x) => x.campaign_id === c.id);
     const cs = S.filter((x) => x.campaign_id === c.id);
 
-    // Only count tasks that are actually due (due_date ≤ today) — future tasks shouldn't drag % down
-    const dueTasks = ct.filter((x) => x.due_date <= today);
-    const submitted = dueTasks.filter((x) =>
-      ["submitted", "approved", "rejected"].includes(x.status),
-    ).length;
+    const weekTasks = ct.filter((x) => x.due_date >= weekStart && x.due_date <= weekEnd);
+    const monthTasks = ct.filter((x) => x.due_date >= monthStart && x.due_date <= monthEnd);
+
+    const weekSubmitted = weekTasks.filter((x) => SUBMITTED.includes(x.status)).length;
+    const monthSubmitted = monthTasks.filter((x) => SUBMITTED.includes(x.status)).length;
+
     const reviewed = cs.filter((x) => x.human_verdict).length;
     const rejected = cs.filter((x) => x.human_verdict === "rejected").length;
     const approvedCycles = ct.filter((x) => x.status === "approved").length;
-    const submissionPct = pct(submitted, dueTasks.length);
+
+    const submissionPctWeek = pct(weekSubmitted, weekTasks.length);
+    const submissionPctMonth = pct(monthSubmitted, monthTasks.length);
 
     return {
       id: c.id,
@@ -109,10 +143,12 @@ export async function getCampaignHealthRows(): Promise<CampaignHealthRow[]> {
         .filter(Boolean),
       startDate: c.start_date ?? null,
       endDate: c.end_date ?? null,
-      submissionPct,
+      submissionPctWeek,
+      submissionPctMonth,
       nonRejectionPct: pct(reviewed - rejected, reviewed),
       payoutCommitted: c.payout_enabled ? approvedCycles * Number(c.payout_amount) : 0,
-      health: healthOf(submissionPct, dueTasks.length > 0, t),
+      healthWeek: healthOf(submissionPctWeek, weekTasks.length > 0, t),
+      healthMonth: healthOf(submissionPctMonth, monthTasks.length > 0, t),
     };
   });
 }
