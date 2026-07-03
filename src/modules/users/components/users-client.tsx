@@ -111,8 +111,8 @@ export function UsersClient({
 
   // ── Bulk selection ─────────────────────────────────────────────────────
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [bulkRoleId, setBulkRoleId] = useState("");
-  const [bulkDeptId, setBulkDeptId] = useState("");
+  const [bulkRoleIds, setBulkRoleIds] = useState<string[]>([]);
+  const [bulkDeptIds, setBulkDeptIds] = useState<string[]>([]);
 
   // ── Bulk map-to-shell modal ────────────────────────────────────────────────
   const [bulkMapOpen, setBulkMapOpen] = useState(false);
@@ -134,8 +134,8 @@ export function UsersClient({
 
   function clearSelection() {
     setSelectedIds(new Set());
-    setBulkRoleId("");
-    setBulkDeptId("");
+    setBulkRoleIds([]);
+    setBulkDeptIds([]);
     setBulkMappings({});
   }
 
@@ -152,18 +152,18 @@ export function UsersClient({
   }
 
   function applyBulkRole() {
-    if (!bulkRoleId) return;
+    if (!bulkRoleIds.length) return;
     startTransition(async () => {
-      await bulkSetRole(Array.from(selectedIds), bulkRoleId);
+      await bulkSetRole(Array.from(selectedIds), bulkRoleIds);
       clearSelection();
       router.refresh();
     });
   }
 
   function applyBulkDept() {
-    if (!bulkDeptId) return;
+    if (!bulkDeptIds.length) return;
     startTransition(async () => {
-      await bulkSetDepartment(Array.from(selectedIds), bulkDeptId);
+      await bulkSetDepartment(Array.from(selectedIds), bulkDeptIds);
       clearSelection();
       router.refresh();
     });
@@ -882,19 +882,15 @@ export function UsersClient({
             )}
 
             <div className="flex items-center gap-1.5">
-              <select
-                value={bulkRoleId}
-                onChange={(e) => setBulkRoleId(e.target.value)}
-                className="rounded-lg border border-border bg-input px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
-              >
-                <option value="">Set role…</option>
-                {roles.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name}
-                  </option>
-                ))}
-              </select>
-              {bulkRoleId && (
+              <div className="w-48">
+                <MultiSelect
+                  options={roles.map((r) => ({ id: r.id, label: r.name }))}
+                  selected={bulkRoleIds}
+                  onChange={setBulkRoleIds}
+                  placeholder="Set roles…"
+                />
+              </div>
+              {bulkRoleIds.length > 0 && (
                 <Button size="md" onClick={applyBulkRole} disabled={pending}>
                   Apply
                 </Button>
@@ -902,19 +898,15 @@ export function UsersClient({
             </div>
 
             <div className="flex items-center gap-1.5">
-              <select
-                value={bulkDeptId}
-                onChange={(e) => setBulkDeptId(e.target.value)}
-                className="rounded-lg border border-border bg-input px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
-              >
-                <option value="">Set department…</option>
-                {departments.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
-                  </option>
-                ))}
-              </select>
-              {bulkDeptId && (
+              <div className="w-48">
+                <MultiSelect
+                  options={departments.map((d) => ({ id: d.id, label: d.name }))}
+                  selected={bulkDeptIds}
+                  onChange={setBulkDeptIds}
+                  placeholder="Set departments…"
+                />
+              </div>
+              {bulkDeptIds.length > 0 && (
                 <Button size="md" onClick={applyBulkDept} disabled={pending}>
                   Apply
                 </Button>
