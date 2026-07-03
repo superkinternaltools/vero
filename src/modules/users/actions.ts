@@ -223,7 +223,7 @@ export async function mapUserToShell(
 
   const { data: shell } = await supabase
     .from("shell_users")
-    .select("id, job_title_id, role_id, shell_user_stores ( store_id )")
+    .select("id, display_name, job_title_id, role_id, shell_user_stores ( store_id )")
     .eq("id", shellId)
     .maybeSingle();
 
@@ -232,7 +232,11 @@ export async function mapUserToShell(
 
   await supabase
     .from("profiles")
-    .update({ status: "active", job_title_id: s.job_title_id })
+    .update({
+      status: "active",
+      job_title_id: s.job_title_id,
+      display_name: s.display_name || undefined,
+    })
     .eq("id", profileId);
 
   if (s.role_id) {
