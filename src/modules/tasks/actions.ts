@@ -229,6 +229,33 @@ export async function autoGenerateTasks(campaignId: string): Promise<void> {
   revalidatePath("/tasks");
 }
 
+export async function acknowledgeNonSubmission(taskId: string): Promise<{ error?: string }> {
+  const me = await getCurrentProfile();
+  if (!me?.is_admin) return { error: "Not authorized." };
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("tasks")
+    .update({ non_submission_acknowledged: true })
+    .eq("id", taskId);
+  if (error) return { error: error.message };
+  revalidatePath("/summary");
+  return {};
+}
+
+export async function resetTaskToPending(taskId: string): Promise<{ error?: string }> {
+  const me = await getCurrentProfile();
+  if (!me?.is_admin) return { error: "Not authorized." };
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("tasks")
+    .update({ status: "pending", non_submission_reason: null, non_submission_acknowledged: false })
+    .eq("id", taskId);
+  if (error) return { error: error.message };
+  revalidatePath("/summary");
+  revalidatePath("/tasks");
+  return {};
+}
+
 export async function purgePendingTasks(campaignId: string): Promise<void> {
   const supabase = await createClient();
   const today = new Date().toISOString().split("T")[0];

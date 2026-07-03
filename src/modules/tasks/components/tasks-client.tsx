@@ -376,6 +376,39 @@ export function TasksClient({
         <Pagination page={pendingPage} total={pendingTasks.length} onPage={setPendingPage} />
       </section>
 
+      {/* Can't do it — not done */}
+      <section className="mt-8">
+        <h2 className="text-sm font-semibold text-foreground">Can&apos;t Do It</h2>
+        <div className="mt-3 space-y-3">
+          {notDoneTasks.map((t) => (
+            <div key={t.id} className="rounded-2xl border border-border bg-card p-4 opacity-70">
+              <p className="text-sm font-medium leading-snug text-foreground">{t.campaignName}</p>
+              <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Building2 className="h-3.5 w-3.5 shrink-0" />
+                <span>{t.storeName}</span>
+              </div>
+              <div className="mt-3 flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Calendar className="h-3.5 w-3.5 shrink-0" />
+                  <span>{displayDue(t)}</span>
+                </div>
+                <span className={cn("inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium", STATUS_STYLES.not_done)}>
+                  Can&apos;t do it
+                </span>
+              </div>
+              {t.nonSubmissionReason && (
+                <p className="mt-2 text-xs text-muted-foreground">Reason: {t.nonSubmissionReason}</p>
+              )}
+            </div>
+          ))}
+          {notDoneTasks.length === 0 && (
+            <div className="rounded-2xl border border-border bg-card p-6 text-center text-sm text-muted-foreground">
+              No tasks marked as can&apos;t do it.
+            </div>
+          )}
+        </div>
+      </section>
+
       {/* Submitted — not approved */}
       <section className="mt-8">
         <h2 className="text-sm font-semibold text-foreground">Submitted — Not Approved</h2>
@@ -469,35 +502,6 @@ export function TasksClient({
         <Pagination page={approvedPage} total={approvedTasks.length} onPage={setApprovedPage} />
       </section>
 
-      {/* Not done */}
-      {notDoneTasks.length > 0 && (
-        <section className="mt-8">
-          <h2 className="text-sm font-semibold text-foreground">Closed — Not Done</h2>
-          <div className="mt-3 space-y-3">
-            {notDoneTasks.map((t) => (
-              <div key={t.id} className="rounded-2xl border border-border bg-card p-4">
-                <p className="text-sm font-medium leading-snug text-foreground">{t.campaignName}</p>
-                <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Building2 className="h-3.5 w-3.5 shrink-0" />
-                  <span>{t.storeName}</span>
-                </div>
-                <div className="mt-3 flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <Calendar className="h-3.5 w-3.5 shrink-0" />
-                    <span>{displayDue(t)}</span>
-                  </div>
-                  <span className={cn("inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium", STATUS_STYLES.not_done)}>
-                    Not done
-                  </span>
-                </div>
-                {t.nonSubmissionReason && (
-                  <p className="mt-2 text-xs text-muted-foreground">{t.nonSubmissionReason}</p>
-                )}
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
 
       {/* Upload / re-upload modal */}
       {active && (

@@ -3,6 +3,7 @@ import type { PayoutTier } from "@/modules/campaigns/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export type CellData = {
+  taskId: string;
   status: string;
   photos: string[];
   submissionId: string | null;
@@ -16,6 +17,8 @@ export type CellData = {
   duplicateFlag: boolean;
   geofenceDistanceM: number | null;
   payoutTierLabel: string | null;
+  nonSubmissionReason: string | null;
+  nonSubmissionAcknowledged: boolean;
 };
 
 export type Matrix = {
@@ -50,7 +53,7 @@ export async function getCampaignMatrix(id: string): Promise<Matrix | null> {
     .from("tasks")
     .select(
       `
-      id, store_id, due_date, status,
+      id, store_id, due_date, status, non_submission_reason, non_submission_acknowledged,
       stores ( name ),
       submissions ( id, photos, ai_score, ai_verdict, ai_assessment, human_verdict, rejection_reason, geofence_flag, duplicate_flag, geofence_distance_m, payout_tier_label, created_at, submitted_by, profiles ( display_name ) )
       `,
@@ -71,6 +74,7 @@ export async function getCampaignMatrix(id: string): Promise<Matrix | null> {
     const latest = subs[0];
     cells[t.store_id] = cells[t.store_id] ?? {};
     cells[t.store_id][t.due_date] = {
+      taskId: t.id,
       status: t.status,
       photos: latest?.photos ?? [],
       submissionId: latest?.id ?? null,
@@ -84,6 +88,8 @@ export async function getCampaignMatrix(id: string): Promise<Matrix | null> {
       duplicateFlag: latest?.duplicate_flag ?? false,
       geofenceDistanceM: latest?.geofence_distance_m ?? null,
       payoutTierLabel: latest?.payout_tier_label ?? null,
+      nonSubmissionReason: t.non_submission_reason ?? null,
+      nonSubmissionAcknowledged: t.non_submission_acknowledged ?? false,
     };
   }
 

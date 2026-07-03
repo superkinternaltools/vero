@@ -8,6 +8,7 @@ import { cn } from "@/core/lib/utils";
 import type { Matrix, CellData } from "../queries";
 import type { PayoutTier } from "@/modules/campaigns/types";
 import { approveSubmission, rejectSubmission } from "@/modules/review/actions";
+import { acknowledgeNonSubmission, resetTaskToPending } from "@/modules/tasks/actions";
 import { closeGeofenceFlag, closeDuplicateFlag } from "../actions";
 
 const CELL: Record<string, { cls: string; label: string }> = {
@@ -16,7 +17,7 @@ const CELL: Record<string, { cls: string; label: string }> = {
   submitted: { cls: "bg-info/15 text-info", label: "Sub" },
   pending: { cls: "bg-warning/15 text-warning", label: "Pend" },
   missed: { cls: "bg-muted text-muted-foreground", label: "Miss" },
-  not_done: { cls: "bg-muted text-muted-foreground", label: "N/D" },
+  not_done: { cls: "bg-muted text-muted-foreground", label: "Can't" },
 };
 
 const STATUS_OPTS = [
@@ -26,6 +27,7 @@ const STATUS_OPTS = [
   { value: "approved", label: "Approved" },
   { value: "rejected", label: "Rejected" },
   { value: "missed", label: "Missed" },
+  { value: "not_done", label: "Can't do it" },
 ];
 
 function tierColor(tiers: PayoutTier[], label: string): string {
@@ -40,9 +42,25 @@ function cellDisplay(
   c: CellData,
   payoutModel: string,
   payoutTiers: PayoutTier[],
-): { label: string; cls: string } {
-  if (payoutModel === "tiered" && c.payoutTierLabel) {
-    return { label: c.payoutTierLabel, cls: tierColor(payoutTiers, c.payoutTierLabel) };
+): { label: string; cls: string; aiOnly?: boolean; acknowledged?: boolean } {
+  // Human reviewed — show final verdict / tier
+  if (c.humanVerdict) {
+    if (payoutModel === "tiered" && c.payoutTierLabel) {
+      return { label: c.payoutTierLabel, cls: tierColor(payoutTiers, c.payoutTierLabel) };
+    }
+    return CELL[c.status] ?? { label: c.status, cls: "bg-muted text-muted-foreground" };
+  }
+  // AI scored but no human verdict yet — show AI verdict with indicator
+  if (c.aiVerdict) {
+    return {
+      label: c.aiVerdict === "approved" ? "Appr" : "Rej",
+      cls: c.aiVerdict === "approved" ? "bg-success/15 text-success" : "bg-danger/15 text-danger",
+      aiOnly: true,
+    };
+  }
+  // Not done — pass acknowledgement state for the grid indicator
+  if (c.status === "not_done") {
+    return { ...CELL.not_done, acknowledged: c.nonSubmissionAcknowledged };
   }
   return CELL[c.status] ?? { label: c.status, cls: "bg-muted text-muted-foreground" };
 }
@@ -205,6 +223,24 @@ export function SummaryClient({
     if (!reason) { setError("Pick a reason."); return; }
     start(async () => {
       const res = await rejectSubmission(cell.data.submissionId!, reason);
+      if (res?.error) setError(res.error);
+      else { setCell(null); router.refresh(); }
+    });
+  }
+
+  function acknowledge() {
+    if (!cell?.data.taskId) return;
+    start(async () => {
+      const res = await acknowledgeNonSubmission(cell.data.taskId);
+      if (res?.error) setError(res.error);
+      else { setCell(null); router.refresh(); }
+    });
+  }
+
+  function sendBack() {
+    if (!cell?.data.taskId) return;
+    start(async () => {
+      const res = await resetTaskToPending(cell.data.taskId);
       if (res?.error) setError(res.error);
       else { setCell(null); router.refresh(); }
     });
@@ -468,6 +504,12 @@ export function SummaryClient({
                                   {hasFlag && (
                                     <span className="absolute -right-1 -top-1 flex h-2.5 w-2.5 items-center justify-center rounded-full bg-warning text-[8px] text-white">!</span>
                                   )}
+                                  {display?.aiOnly && (
+                                    <span className="absolute -left-1 -top-1 flex h-3 min-w-[18px] items-center justify-center rounded-full bg-info px-0.5 text-[7px] font-bold leading-none text-white">AI</span>
+                                  )}
+                                  {display?.acknowledged && (
+                                    <span className="absolute -left-1 -top-1 flex h-3 w-3 items-center justify-center rounded-full bg-success text-[8px] font-bold leading-none text-white">✓</span>
+                                  )}
                                 </button>
                               </td>
                             );
@@ -649,6 +691,35 @@ export function SummaryClient({
               )}
             </div>
 
+            {/* Not-done: reason + admin review actions */}
+            {cell.data.status === "not_done" && (
+              <div className="mt-3 rounded-xl border border-border p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-foreground">Reason given</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {cell.data.nonSubmissionReason ?? "No reason provided."}
+                </p>
+                {cell.data.nonSubmissionAcknowledged ? (
+                  <span className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-1 text-xs font-medium text-success">
+                    ✓ Acknowledged — reason accepted
+                  </span>
+                ) : isAdmin ? (
+                  <>
+                    {error && <p className="mt-2 text-sm font-medium text-danger">{error}</p>}
+                    <div className="mt-3 flex gap-2">
+                      <Button variant="outline" size="md" onClick={sendBack} disabled={pending}>
+                        Invalid — send back
+                      </Button>
+                      <Button size="md" onClick={acknowledge} disabled={pending}>
+                        Valid reason
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="mt-2 text-xs text-muted-foreground">Pending admin review.</p>
+                )}
+              </div>
+            )}
+
             {isAdmin && cell.data.aiScore != null && (
               <div className="mt-3 rounded-xl border border-border p-3 text-sm text-muted-foreground">
                 <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-foreground">AI assessment</p>
@@ -724,7 +795,7 @@ export function SummaryClient({
               </div>
             )}
 
-            {/* Review actions (admin only, submitted status) */}
+            {/* Review actions (admin only, submitted status, not a not_done task) */}
             {isAdmin && cell.data.submissionId && cell.data.status === "submitted" && (
               <>
                 {rejecting && (
