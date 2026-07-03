@@ -9,7 +9,7 @@ import type { Matrix, CellData } from "../queries";
 import type { PayoutTier } from "@/modules/campaigns/types";
 import { approveSubmission, rejectSubmission, selectPayoutTier } from "@/modules/review/actions";
 import { acknowledgeNonSubmission, resetTaskToPending } from "@/modules/tasks/actions";
-import { closeGeofenceFlag, closeDuplicateFlag } from "../actions";
+import { closeGeofenceFlag, closeDuplicateFlag, retryAiScoring } from "../actions";
 
 const CELL: Record<string, { cls: string; label: string }> = {
   approved: { cls: "bg-success/15 text-success", label: "Appr" },
@@ -291,6 +291,15 @@ export function SummaryClient({
     if (!cell?.data.submissionId) return;
     start(async () => {
       const res = await closeDuplicateFlag(cell.data.submissionId!);
+      if (res?.error) setError(res.error);
+      else router.refresh();
+    });
+  }
+
+  function retryAi() {
+    if (!cell?.data.submissionId) return;
+    start(async () => {
+      const res = await retryAiScoring(cell.data.submissionId!);
       if (res?.error) setError(res.error);
       else router.refresh();
     });
@@ -749,6 +758,16 @@ export function SummaryClient({
                 ) : (
                   <p className="mt-2 text-xs text-muted-foreground">Pending admin review.</p>
                 )}
+              </div>
+            )}
+
+            {isAdmin && matrix?.aiReview && cell.data.aiScore === null && cell.data.submissionId && (
+              <div className="mt-3 rounded-xl border border-dashed border-border p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">AI Review</p>
+                <p className="mt-1 text-xs text-muted-foreground">No AI assessment available for this submission.</p>
+                <Button variant="outline" size="md" className="mt-2" onClick={retryAi} disabled={pending}>
+                  Send for AI review
+                </Button>
               </div>
             )}
 

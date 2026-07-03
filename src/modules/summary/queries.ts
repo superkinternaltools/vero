@@ -25,6 +25,7 @@ export type Matrix = {
   campaignName: string;
   payoutModel: string;
   payoutTiers: PayoutTier[];
+  aiReview: boolean;
   stores: { id: string; name: string }[];
   cycles: string[];
   cells: Record<string, Record<string, CellData>>;
@@ -44,7 +45,7 @@ export async function getCampaignMatrix(id: string): Promise<Matrix | null> {
   const supabase = await createClient();
   const { data: campaign } = await supabase
     .from("campaigns")
-    .select("name, payout_model, payout_tiers")
+    .select("name, payout_model, payout_tiers, ai_review")
     .eq("id", id)
     .maybeSingle();
   if (!campaign) return null;
@@ -103,6 +104,7 @@ export async function getCampaignMatrix(id: string): Promise<Matrix | null> {
     campaignName: c.name,
     payoutModel: c.payout_model ?? "binary",
     payoutTiers: c.payout_tiers ?? [],
+    aiReview: c.ai_review ?? false,
     stores,
     cycles,
     cells,
