@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import Link from "next/link";
 import { Search } from "lucide-react";
 import { cn } from "@/core/lib/utils";
+import { MultiSelect } from "@/core/ui/multi-select";
 import type { CampaignHealthRow, Health } from "../stats";
 import { HealthBadge } from "./health-badge";
 
@@ -15,21 +16,117 @@ const HEALTH_OPTS: { value: string; label: string }[] = [
   { value: "no_data", label: "No Data" },
 ];
 
+const today = new Date().toISOString().split("T")[0];
+
 export function HealthTableClient({ rows }: { rows: CampaignHealthRow[] }) {
   const [search, setSearch] = useState("");
   const [healthFilter, setHealthFilter] = useState<Health | "">("");
+  const [campaignIds, setCampaignIds] = useState<string[]>([]);
+  const [deptFilter, setDeptFilter] = useState("");
+  const [activeOnly, setActiveOnly] = useState(false);
+
+  // Build department options from all rows
+  const deptOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const opts: { value: string; label: string }[] = [{ value: "", label: "All departments" }];
+    for (const r of rows) {
+      for (const d of r.departmentNames) {
+        if (!seen.has(d)) {
+          seen.add(d);
+          opts.push({ value: d, label: d });
+        }
+      }
+    }
+    return opts;
+  }, [rows]);
+
+  const campaignOptions = useMemo(
+    () => rows.map((r) => ({ id: r.id, label: r.name })),
+    [rows],
+  );
 
   const filtered = rows.filter((r) => {
+    if (campaignIds.length > 0 && !campaignIds.includes(r.id)) return false;
     if (search && !r.name.toLowerCase().includes(search.toLowerCase())) return false;
     if (healthFilter && r.health !== healthFilter) return false;
+    if (deptFilter && !r.departmentNames.includes(deptFilter)) return false;
+    if (activeOnly) {
+      if (!r.startDate || !r.endDate) return false;
+      if (r.startDate > today || r.endDate < today) return false;
+    }
     return true;
   });
+
+  const hasFilters = search || healthFilter || campaignIds.length > 0 || deptFilter || activeOnly;
+
+  function clearAll() {
+    setSearch("");
+    setHealthFilter("");
+    setCampaignIds([]);
+    setDeptFilter("");
+    setActiveOnly(false);
+  }
 
   return (
     <section className="mt-10">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-foreground">Campaign health</h2>
+
         <div className="flex flex-wrap items-center gap-2">
+          {/* Campaign multi-select */}
+          <div className="w-56">
+            <MultiSelect
+              options={campaignOptions}
+              selected={campaignIds}
+              onChange={setCampaignIds}
+              placeholder="All campaigns"
+              dropUp
+            />
+          </div>
+
+          {/* Department filter */}
+          {deptOptions.length > 1 && (
+            <select
+              value={deptFilter}
+              onChange={(e) => setDeptFilter(e.target.value)}
+              className="rounded-xl border border-transparent bg-input px-3 py-2 text-sm text-foreground focus:border-primary focus:bg-card focus:outline-none"
+            >
+              {deptOptions.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {/* Health filter */}
+          <select
+            value={healthFilter}
+            onChange={(e) => setHealthFilter(e.target.value as Health | "")}
+            className="rounded-xl border border-transparent bg-input px-3 py-2 text-sm text-foreground focus:border-primary focus:bg-card focus:outline-none"
+          >
+            {HEALTH_OPTS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+
+          {/* Active now toggle */}
+          <button
+            type="button"
+            onClick={() => setActiveOnly((v) => !v)}
+            className={cn(
+              "rounded-xl border px-3 py-2 text-sm transition-colors",
+              activeOnly
+                ? "border-primary bg-primary/10 font-medium text-primary"
+                : "border-transparent bg-input text-foreground hover:bg-muted",
+            )}
+          >
+            Active now
+          </button>
+
+          {/* Search */}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
@@ -39,19 +136,11 @@ export function HealthTableClient({ rows }: { rows: CampaignHealthRow[] }) {
               className="rounded-xl border border-transparent bg-input py-2 pl-9 pr-4 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
             />
           </div>
-          <select
-            value={healthFilter}
-            onChange={(e) => setHealthFilter(e.target.value as Health | "")}
-            className="rounded-xl border border-transparent bg-input px-3 py-2 text-sm text-foreground focus:border-primary focus:bg-card focus:outline-none"
-          >
-            {HEALTH_OPTS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-          {(search || healthFilter) && (
+
+          {hasFilters && (
             <button
               type="button"
-              onClick={() => { setSearch(""); setHealthFilter(""); }}
+              onClick={clearAll}
               className="rounded-xl border border-border px-3 py-2 text-xs text-muted-foreground hover:bg-muted"
             >
               Clear
@@ -79,12 +168,28 @@ export function HealthTableClient({ rows }: { rows: CampaignHealthRow[] }) {
                   <Link href={`/campaigns/${r.id}`} className="text-foreground hover:text-primary">
                     {r.name}
                   </Link>
+                  {r.departmentNames.length > 0 && (
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {r.departmentNames.join(", ")}
+                    </p>
+                  )}
                 </td>
                 <td className="px-4 py-3 text-muted-foreground">{r.executionTypeName ?? "—"}</td>
-                <td className={cn("px-4 py-3", r.submissionPct < 50 ? "text-danger" : "text-muted-foreground")}>
-                  {r.submissionPct}%
+                <td
+                  className={cn(
+                    "px-4 py-3",
+                    r.submissionPct === 0 && r.health === "no_data"
+                      ? "text-muted-foreground"
+                      : r.submissionPct < 50
+                        ? "text-danger"
+                        : "text-muted-foreground",
+                  )}
+                >
+                  {r.health === "no_data" ? "—" : `${r.submissionPct}%`}
                 </td>
-                <td className="px-4 py-3 text-muted-foreground">{r.nonRejectionPct}%</td>
+                <td className="px-4 py-3 text-muted-foreground">
+                  {r.health === "no_data" ? "—" : `${r.nonRejectionPct}%`}
+                </td>
                 <td className="px-4 py-3 text-muted-foreground">
                   ₹{r.payoutCommitted.toLocaleString("en-IN")}
                 </td>
@@ -105,7 +210,9 @@ export function HealthTableClient({ rows }: { rows: CampaignHealthRow[] }) {
           </tbody>
         </table>
       </div>
-      <p className="mt-2 text-xs text-muted-foreground">Click a campaign or its health badge for the deeper view.</p>
+      <p className="mt-2 text-xs text-muted-foreground">
+        Submission % counts only tasks due on or before today. Click a row for the detailed view.
+      </p>
     </section>
   );
 }

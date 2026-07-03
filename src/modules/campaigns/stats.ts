@@ -8,6 +8,9 @@ export type CampaignHealthRow = {
   id: string;
   name: string;
   executionTypeName: string | null;
+  departmentNames: string[];
+  startDate: string | null;
+  endDate: string | null;
   submissionPct: number;
   nonRejectionPct: number;
   payoutCommitted: number;
@@ -66,37 +69,50 @@ function healthOf(submissionPct: number, hasTasks: boolean, t: { onTrack: number
 export async function getCampaignHealthRows(): Promise<CampaignHealthRow[]> {
   const supabase = await createClient();
   const t = await getThresholds();
+  const today = new Date().toISOString().split("T")[0];
 
   const [{ data: campaigns }, { data: tasks }, { data: subs }] = await Promise.all([
     supabase
       .from("campaigns")
-      .select("id, name, payout_enabled, payout_amount, execution_types ( name )")
+      .select(
+        "id, name, start_date, end_date, payout_enabled, payout_amount, execution_types ( name ), campaign_departments ( departments ( name ) )",
+      )
       .is("deleted_at", null)
       .order("created_at", { ascending: false }),
-    supabase.from("tasks").select("campaign_id, status"),
+    supabase.from("tasks").select("campaign_id, status, due_date"),
     supabase.from("submissions").select("campaign_id, human_verdict, status"),
   ]);
 
   const T = (tasks as any[]) ?? [];
   const S = (subs as any[]) ?? [];
 
-  return (((campaigns as any[]) ?? [])).map((c) => {
+  return ((campaigns as any[]) ?? []).map((c) => {
     const ct = T.filter((x) => x.campaign_id === c.id);
     const cs = S.filter((x) => x.campaign_id === c.id);
-    const assigned = ct.length;
-    const submitted = ct.filter((x) => ["submitted", "approved", "rejected"].includes(x.status)).length;
+
+    // Only count tasks that are actually due (due_date ≤ today) — future tasks shouldn't drag % down
+    const dueTasks = ct.filter((x) => x.due_date <= today);
+    const submitted = dueTasks.filter((x) =>
+      ["submitted", "approved", "rejected"].includes(x.status),
+    ).length;
     const reviewed = cs.filter((x) => x.human_verdict).length;
     const rejected = cs.filter((x) => x.human_verdict === "rejected").length;
     const approvedCycles = ct.filter((x) => x.status === "approved").length;
-    const submissionPct = pct(submitted, assigned);
+    const submissionPct = pct(submitted, dueTasks.length);
+
     return {
       id: c.id,
       name: c.name,
       executionTypeName: c.execution_types?.name ?? null,
+      departmentNames: (c.campaign_departments ?? [])
+        .map((d: any) => d.departments?.name)
+        .filter(Boolean),
+      startDate: c.start_date ?? null,
+      endDate: c.end_date ?? null,
       submissionPct,
       nonRejectionPct: pct(reviewed - rejected, reviewed),
       payoutCommitted: c.payout_enabled ? approvedCycles * Number(c.payout_amount) : 0,
-      health: healthOf(submissionPct, assigned > 0, t),
+      health: healthOf(submissionPct, dueTasks.length > 0, t),
     };
   });
 }
