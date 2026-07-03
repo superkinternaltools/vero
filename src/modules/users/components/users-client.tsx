@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Pencil, UserPlus, Plus, Upload, Trash2, Link2 } from "lucide-react";
+import { Pencil, UserPlus, Plus, Upload, Trash2, Link2, X } from "lucide-react";
 import { Button } from "@/core/ui/button";
 import { Input } from "@/core/ui/input";
 import { Modal } from "@/core/ui/modal";
@@ -17,6 +17,9 @@ import {
   updateShellUser,
   deleteShellUser,
   mapUserToShell,
+  bulkApproveUsers,
+  bulkSetRole,
+  bulkSetDepartment,
 } from "../actions";
 import { BulkUploadModal } from "./bulk-upload-modal";
 
@@ -105,6 +108,65 @@ export function UsersClient({
 
   // ── Bulk upload modal ──────────────────────────────────────────────────
   const [bulkOpen, setBulkOpen] = useState(false);
+
+  // ── Bulk selection ─────────────────────────────────────────────────────
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkRoleId, setBulkRoleId] = useState("");
+  const [bulkDeptId, setBulkDeptId] = useState("");
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    setSelectedIds((prev) =>
+      prev.size === users.length ? new Set() : new Set(users.map((u) => u.id)),
+    );
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+    setBulkRoleId("");
+    setBulkDeptId("");
+  }
+
+  function bulkApprove() {
+    const pendingIds = users
+      .filter((u) => selectedIds.has(u.id) && u.status === "pending")
+      .map((u) => u.id);
+    if (!pendingIds.length) return;
+    startTransition(async () => {
+      await bulkApproveUsers(pendingIds);
+      clearSelection();
+      router.refresh();
+    });
+  }
+
+  function applyBulkRole() {
+    if (!bulkRoleId) return;
+    startTransition(async () => {
+      await bulkSetRole(Array.from(selectedIds), bulkRoleId);
+      clearSelection();
+      router.refresh();
+    });
+  }
+
+  function applyBulkDept() {
+    if (!bulkDeptId) return;
+    startTransition(async () => {
+      await bulkSetDepartment(Array.from(selectedIds), bulkDeptId);
+      clearSelection();
+      router.refresh();
+    });
+  }
+
+  const selectedPendingCount = users.filter(
+    (u) => selectedIds.has(u.id) && u.status === "pending",
+  ).length;
 
   // ── Handlers: real users ───────────────────────────────────────────────
   function openEdit(u: UserRow) {
@@ -378,6 +440,14 @@ export function UsersClient({
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                <th className="w-10 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    checked={users.length > 0 && selectedIds.size === users.length}
+                    onChange={toggleSelectAll}
+                    className="h-4 w-4 cursor-pointer rounded accent-primary"
+                  />
+                </th>
                 <th className="px-4 py-3 font-semibold">Name</th>
                 <th className="px-4 py-3 font-semibold">Email</th>
                 <th className="px-4 py-3 font-semibold">Status</th>
@@ -389,6 +459,14 @@ export function UsersClient({
             <tbody>
               {users.map((u) => (
                 <tr key={u.id} className="border-b border-border align-top last:border-0">
+                  <td className="px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(u.id)}
+                      onChange={() => toggleSelect(u.id)}
+                      className="h-4 w-4 cursor-pointer rounded accent-primary"
+                    />
+                  </td>
                   <td className="px-4 py-3 font-medium text-foreground">
                     {u.display_name ?? "—"}
                   </td>
@@ -443,7 +521,7 @@ export function UsersClient({
               ))}
               {users.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="p-10 text-center text-sm text-muted-foreground">
+                  <td colSpan={7} className="p-10 text-center text-sm text-muted-foreground">
                     No users yet.
                   </td>
                 </tr>
@@ -759,6 +837,71 @@ export function UsersClient({
           </div>
         </div>
       </Modal>
+
+      {/* ── Floating bulk action bar ── */}
+      {selectedIds.size > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-border bg-card shadow-lg md:left-64">
+          <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-5 py-3">
+            <span className="text-sm font-medium text-foreground">
+              {selectedIds.size} selected
+            </span>
+
+            {selectedPendingCount > 0 && (
+              <Button size="md" onClick={bulkApprove} disabled={pending}>
+                Approve {selectedPendingCount} pending
+              </Button>
+            )}
+
+            <div className="flex items-center gap-1.5">
+              <select
+                value={bulkRoleId}
+                onChange={(e) => setBulkRoleId(e.target.value)}
+                className="rounded-lg border border-border bg-input px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+              >
+                <option value="">Set role…</option>
+                {roles.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name}
+                  </option>
+                ))}
+              </select>
+              {bulkRoleId && (
+                <Button size="md" onClick={applyBulkRole} disabled={pending}>
+                  Apply
+                </Button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <select
+                value={bulkDeptId}
+                onChange={(e) => setBulkDeptId(e.target.value)}
+                className="rounded-lg border border-border bg-input px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+              >
+                <option value="">Set department…</option>
+                {departments.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+              {bulkDeptId && (
+                <Button size="md" onClick={applyBulkDept} disabled={pending}>
+                  Apply
+                </Button>
+              )}
+            </div>
+
+            <button
+              onClick={clearSelection}
+              aria-label="Clear selection"
+              className="ml-auto rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Bulk upload modal ── */}
       <BulkUploadModal

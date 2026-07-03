@@ -20,6 +20,45 @@ export async function approveUser(id: string): Promise<Result> {
   return {};
 }
 
+export async function bulkApproveUsers(ids: string[]): Promise<Result> {
+  if (!ids.length) return {};
+  const me = await getCurrentProfile();
+  if (!me?.is_admin) return { error: "Not authorized." };
+  const supabase = await createClient();
+  const { error } = await supabase.from("profiles").update({ status: "active" }).in("id", ids);
+  if (error) return { error: error.message };
+  revalidatePath("/users");
+  return {};
+}
+
+export async function bulkSetRole(ids: string[], roleId: string): Promise<Result> {
+  if (!ids.length) return {};
+  const me = await getCurrentProfile();
+  if (!me?.is_admin) return { error: "Not authorized." };
+  const supabase = await createClient();
+  await supabase.from("user_roles").delete().in("user_id", ids);
+  if (roleId)
+    await supabase
+      .from("user_roles")
+      .insert(ids.map((user_id) => ({ user_id, role_id: roleId })));
+  revalidatePath("/users");
+  return {};
+}
+
+export async function bulkSetDepartment(ids: string[], departmentId: string): Promise<Result> {
+  if (!ids.length) return {};
+  const me = await getCurrentProfile();
+  if (!me?.is_admin) return { error: "Not authorized." };
+  const supabase = await createClient();
+  await supabase.from("user_departments").delete().in("user_id", ids);
+  if (departmentId)
+    await supabase
+      .from("user_departments")
+      .insert(ids.map((user_id) => ({ user_id, department_id: departmentId })));
+  revalidatePath("/users");
+  return {};
+}
+
 export async function updateUser(
   id: string,
   values: {
