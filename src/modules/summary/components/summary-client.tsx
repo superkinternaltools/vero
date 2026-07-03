@@ -7,7 +7,7 @@ import { Button } from "@/core/ui/button";
 import { cn } from "@/core/lib/utils";
 import type { Matrix, CellData } from "../queries";
 import type { PayoutTier } from "@/modules/campaigns/types";
-import { approveSubmission, rejectSubmission } from "@/modules/review/actions";
+import { approveSubmission, rejectSubmission, selectPayoutTier } from "@/modules/review/actions";
 import { acknowledgeNonSubmission, resetTaskToPending } from "@/modules/tasks/actions";
 import { closeGeofenceFlag, closeDuplicateFlag } from "../actions";
 
@@ -52,9 +52,11 @@ function cellDisplay(
   }
   // AI scored but no human verdict yet — show AI verdict with indicator
   if (c.aiVerdict) {
+    const matchedTier = payoutTiers.find((t) => t.label === c.aiVerdict);
+    const isApproved = matchedTier ? matchedTier.pct > 0 : c.aiVerdict === "approved";
     return {
-      label: c.aiVerdict === "approved" ? "Appr" : "Rej",
-      cls: c.aiVerdict === "approved" ? "bg-success/15 text-success" : "bg-danger/15 text-danger",
+      label: isApproved ? "Appr" : "Rej",
+      cls: isApproved ? "bg-success/15 text-success" : "bg-danger/15 text-danger",
       aiOnly: true,
     };
   }
@@ -122,6 +124,7 @@ export function SummaryClient({
   const [pending, start] = useTransition();
   const [cell, setCell] = useState<{ data: CellData; store: string; cycle: string } | null>(null);
   const [rejecting, setRejecting] = useState(false);
+  const [selectedTier, setSelectedTier] = useState<PayoutTier | null>(null);
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [expandedPhoto, setExpandedPhoto] = useState<string | null>(null);
@@ -205,6 +208,7 @@ export function SummaryClient({
     if (!data) return;
     setCell({ data, store: storeName, cycle });
     setRejecting(false);
+    setSelectedTier(null);
     setReason("");
     setError(null);
   }
@@ -223,6 +227,31 @@ export function SummaryClient({
     if (!reason) { setError("Pick a reason."); return; }
     start(async () => {
       const res = await rejectSubmission(cell.data.submissionId!, reason);
+      if (res?.error) setError(res.error);
+      else { setCell(null); router.refresh(); }
+    });
+  }
+
+  function chooseTier(t: PayoutTier) {
+    if (!cell?.data.submissionId) return;
+    if (t.pct > 0) {
+      start(async () => {
+        const res = await selectPayoutTier(cell.data.submissionId!, t.label, t.pct);
+        if (res?.error) setError(res.error);
+        else { setCell(null); router.refresh(); }
+      });
+    } else {
+      setSelectedTier(t);
+      setReason("");
+      setError(null);
+    }
+  }
+
+  function confirmTier() {
+    if (!cell?.data.submissionId || !selectedTier) return;
+    if (!reason) { setError("Pick a reason."); return; }
+    start(async () => {
+      const res = await selectPayoutTier(cell.data.submissionId!, selectedTier.label, selectedTier.pct, reason);
       if (res?.error) setError(res.error);
       else { setCell(null); router.refresh(); }
     });
@@ -797,37 +826,82 @@ export function SummaryClient({
 
             {/* Review actions (admin only, submitted status, not a not_done task) */}
             {isAdmin && cell.data.submissionId && cell.data.status === "submitted" && (
-              <>
-                {rejecting && (
-                  <div className="mt-4 space-y-1.5">
-                    <label className="block text-sm font-medium text-foreground">Rejection reason</label>
-                    <select
-                      value={reason}
-                      onChange={(e) => setReason(e.target.value)}
-                      className="w-full rounded-xl border border-transparent bg-input px-4 py-3 text-sm text-foreground focus:border-primary focus:bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
-                    >
-                      <option value="">Select a reason…</option>
-                      {rejectionReasons.map((r) => (
-                        <option key={r.id} value={r.name}>{r.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-                {error && <p className="mt-3 text-sm font-medium text-danger">{error}</p>}
-                <div className="mt-4 flex justify-end gap-2">
-                  {!rejecting ? (
-                    <>
-                      <Button variant="outline" size="md" onClick={() => setRejecting(true)}>Reject</Button>
-                      <Button size="md" onClick={approve} disabled={pending}>Approve</Button>
-                    </>
-                  ) : (
-                    <>
-                      <Button variant="outline" size="md" onClick={() => setRejecting(false)}>Back</Button>
-                      <Button size="md" onClick={reject} disabled={pending}>Confirm rejection</Button>
-                    </>
+              matrix?.payoutModel === "tiered" ? (
+                <>
+                  {selectedTier && (
+                    <div className="mt-4 space-y-1.5">
+                      <label className="block text-sm font-medium text-foreground">Rejection reason</label>
+                      <select
+                        value={reason}
+                        onChange={(e) => setReason(e.target.value)}
+                        className="w-full rounded-xl border border-transparent bg-input px-4 py-3 text-sm text-foreground focus:border-primary focus:bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      >
+                        <option value="">Select a reason…</option>
+                        {rejectionReasons.map((r) => (
+                          <option key={r.id} value={r.name}>{r.name}</option>
+                        ))}
+                      </select>
+                    </div>
                   )}
-                </div>
-              </>
+                  {error && <p className="mt-3 text-sm font-medium text-danger">{error}</p>}
+                  <div className="mt-4 flex flex-wrap justify-end gap-2">
+                    {selectedTier ? (
+                      <>
+                        <Button variant="outline" size="md" onClick={() => { setSelectedTier(null); setReason(""); setError(null); }}>
+                          Back
+                        </Button>
+                        <Button size="md" onClick={confirmTier} disabled={pending}>
+                          Confirm rejection
+                        </Button>
+                      </>
+                    ) : (
+                      (matrix?.payoutTiers ?? []).map((t) => (
+                        <Button
+                          key={t.label}
+                          variant={t.pct > 0 ? "default" : "outline"}
+                          size="md"
+                          onClick={() => chooseTier(t)}
+                          disabled={pending}
+                        >
+                          {t.label}
+                        </Button>
+                      ))
+                    )}
+                  </div>
+                </>
+              ) : (
+                <>
+                  {rejecting && (
+                    <div className="mt-4 space-y-1.5">
+                      <label className="block text-sm font-medium text-foreground">Rejection reason</label>
+                      <select
+                        value={reason}
+                        onChange={(e) => setReason(e.target.value)}
+                        className="w-full rounded-xl border border-transparent bg-input px-4 py-3 text-sm text-foreground focus:border-primary focus:bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      >
+                        <option value="">Select a reason…</option>
+                        {rejectionReasons.map((r) => (
+                          <option key={r.id} value={r.name}>{r.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  {error && <p className="mt-3 text-sm font-medium text-danger">{error}</p>}
+                  <div className="mt-4 flex justify-end gap-2">
+                    {!rejecting ? (
+                      <>
+                        <Button variant="outline" size="md" onClick={() => setRejecting(true)}>Reject</Button>
+                        <Button size="md" onClick={approve} disabled={pending}>Approve</Button>
+                      </>
+                    ) : (
+                      <>
+                        <Button variant="outline" size="md" onClick={() => setRejecting(false)}>Back</Button>
+                        <Button size="md" onClick={reject} disabled={pending}>Confirm rejection</Button>
+                      </>
+                    )}
+                  </div>
+                </>
+              )
             )}
           </div>
         </div>
