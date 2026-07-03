@@ -109,8 +109,8 @@ export async function getCampaignHealthRows(): Promise<CampaignHealthRow[]> {
       )
       .is("deleted_at", null)
       .order("created_at", { ascending: false }),
-    supabase.from("tasks").select("campaign_id, status, due_date"),
-    supabase.from("submissions").select("campaign_id, human_verdict, status"),
+    supabase.from("tasks").select("campaign_id, status, due_date").limit(10000),
+    supabase.from("submissions").select("campaign_id, human_verdict, status").limit(10000),
   ]);
 
   const T = (tasks as any[]) ?? [];
