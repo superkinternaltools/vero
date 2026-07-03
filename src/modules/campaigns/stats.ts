@@ -114,7 +114,7 @@ export async function getCampaignHealthRows(): Promise<CampaignHealthRow[]> {
     supabase
       .from("campaigns")
       .select(
-        "id, name, start_date, end_date, payout_enabled, payout_amount, execution_types ( name ), campaign_departments ( departments ( name ) )",
+        "id, name, frequency, start_date, end_date, payout_enabled, payout_amount, execution_types ( name ), campaign_departments ( departments ( name ) ), campaign_stores ( store_id )",
       )
       .is("deleted_at", null)
       .order("created_at", { ascending: false }),
@@ -145,8 +145,18 @@ export async function getCampaignHealthRows(): Promise<CampaignHealthRow[]> {
     const rejected = cs.filter((x) => x.human_verdict === "rejected").length;
     const approvedCycles = ct.filter((x) => x.status === "approved").length;
 
-    const submissionPctWeek = pct(weekSubmitted, weekTasks.length);
-    const submissionPctMonth = pct(monthSubmitted, monthTasks.length);
+    // For weekly/monthly campaigns each store has exactly 1 task per window —
+    // use the number of assigned stores as the authoritative denominator so that
+    // a missing task-generation run doesn't silently lower the %.
+    // For daily campaigns tasks stack up (1 per store per day), so fall back to
+    // actual task count which is accurate once generation has run.
+    const storeCount = (c.campaign_stores ?? []).length;
+    const isDaily = c.frequency === "daily";
+    const weekDenominator = isDaily ? weekTasks.length : storeCount;
+    const monthDenominator = isDaily ? monthTasks.length : storeCount;
+
+    const submissionPctWeek = pct(weekSubmitted, weekDenominator);
+    const submissionPctMonth = pct(monthSubmitted, monthDenominator);
 
     return {
       id: c.id,
@@ -160,13 +170,13 @@ export async function getCampaignHealthRows(): Promise<CampaignHealthRow[]> {
       submissionPctWeek,
       submissionPctMonth,
       weekSubmitted,
-      weekTotal: weekTasks.length,
+      weekTotal: weekDenominator,
       monthSubmitted,
-      monthTotal: monthTasks.length,
+      monthTotal: monthDenominator,
       nonRejectionPct: pct(reviewed - rejected, reviewed),
       payoutCommitted: c.payout_enabled ? approvedCycles * Number(c.payout_amount) : 0,
-      healthWeek: healthOf(submissionPctWeek, weekTasks.length > 0, t),
-      healthMonth: healthOf(submissionPctMonth, monthTasks.length > 0, t),
+      healthWeek: healthOf(submissionPctWeek, isDaily ? weekTasks.length > 0 : storeCount > 0, t),
+      healthMonth: healthOf(submissionPctMonth, isDaily ? monthTasks.length > 0 : storeCount > 0, t),
     };
   });
 }
