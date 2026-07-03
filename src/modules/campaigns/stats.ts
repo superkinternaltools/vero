@@ -159,6 +159,12 @@ export async function getCampaignHealthRows(): Promise<CampaignHealthRow[]> {
     const submissionPctWeek = pct(weekSubmitted, weekDenominator);
     const submissionPctMonth = pct(monthSubmitted, monthDenominator);
 
+    // Use actual task existence in the window to decide whether to show No Data.
+    // For monthly campaigns, tasks are only due on the last day of the month —
+    // so the week window will correctly show No Data until that day arrives.
+    const weekHasTasks = weekTasks.length > 0;
+    const monthHasTasks = monthTasks.length > 0;
+
     return {
       id: c.id,
       name: c.name,
@@ -176,8 +182,8 @@ export async function getCampaignHealthRows(): Promise<CampaignHealthRow[]> {
       monthTotal: monthDenominator,
       nonRejectionPct: pct(reviewed - rejected, reviewed),
       payoutCommitted: c.payout_enabled ? approvedCycles * Number(c.payout_amount) : 0,
-      healthWeek: healthOf(submissionPctWeek, isDaily ? weekTasks.length > 0 : storeCount > 0, t),
-      healthMonth: healthOf(submissionPctMonth, isDaily ? monthTasks.length > 0 : storeCount > 0, t),
+      healthWeek: healthOf(submissionPctWeek, weekHasTasks, t),
+      healthMonth: healthOf(submissionPctMonth, monthHasTasks, t),
     };
   });
 }
