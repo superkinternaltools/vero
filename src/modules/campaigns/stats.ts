@@ -1,4 +1,5 @@
 import { createClient } from "@/core/db/server";
+import { createAdminClient } from "@/core/db/admin";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -68,19 +69,22 @@ function healthOf(submissionPct: number, hasTasks: boolean, t: { onTrack: number
   return "critical";
 }
 
+function localDateStr(y: number, m: number, d: number): string {
+  return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
 function currentWeekWindow(): { weekStart: string; weekEnd: string } {
   const now = new Date();
   const day = now.getDate();
   const weekNum = day <= 7 ? 1 : day <= 14 ? 2 : day <= 21 ? 3 : 4;
-  const startDay = (weekNum - 1) * 7 + 1; // 1, 8, 15, 22
+  const startDay = (weekNum - 1) * 7 + 1;
   const lastOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  const endDay = weekNum === 4 ? lastOfMonth : weekNum * 7; // 7, 14, 21, last
-  const fmt = (d: Date) => d.toISOString().split("T")[0];
+  const endDay = weekNum === 4 ? lastOfMonth : weekNum * 7;
   const y = now.getFullYear();
   const m = now.getMonth();
   return {
-    weekStart: fmt(new Date(y, m, startDay)),
-    weekEnd: fmt(new Date(y, m, endDay)),
+    weekStart: localDateStr(y, m, startDay),
+    weekEnd: localDateStr(y, m, endDay),
   };
 }
 
@@ -88,15 +92,16 @@ function currentMonthWindow(): { monthStart: string; monthEnd: string } {
   const now = new Date();
   const y = now.getFullYear();
   const m = now.getMonth();
-  const fmt = (d: Date) => d.toISOString().split("T")[0];
+  const lastOfMonth = new Date(y, m + 1, 0).getDate();
   return {
-    monthStart: fmt(new Date(y, m, 1)),
-    monthEnd: fmt(new Date(y, m + 1, 0)),
+    monthStart: localDateStr(y, m, 1),
+    monthEnd: localDateStr(y, m, lastOfMonth),
   };
 }
 
 export async function getCampaignHealthRows(): Promise<CampaignHealthRow[]> {
   const supabase = await createClient();
+  const admin = createAdminClient();
   const t = await getThresholds();
   const { weekStart, weekEnd } = currentWeekWindow();
   const { monthStart, monthEnd } = currentMonthWindow();
@@ -109,8 +114,8 @@ export async function getCampaignHealthRows(): Promise<CampaignHealthRow[]> {
       )
       .is("deleted_at", null)
       .order("created_at", { ascending: false }),
-    supabase.from("tasks").select("campaign_id, status, due_date").limit(10000),
-    supabase.from("submissions").select("campaign_id, human_verdict, status").limit(10000),
+    admin.from("tasks").select("campaign_id, status, due_date").limit(10000),
+    admin.from("submissions").select("campaign_id, human_verdict, status").limit(10000),
   ]);
 
   const T = (tasks as any[]) ?? [];
