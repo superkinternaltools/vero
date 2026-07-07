@@ -2,251 +2,334 @@
 
 import { useState, useMemo } from "react";
 import Link from "next/link";
-import { Search } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { cn } from "@/core/lib/utils";
-import { MultiSelect } from "@/core/ui/multi-select";
 import type { CampaignHealthRow, Health } from "../stats";
-import { HealthBadge } from "./health-badge";
 
-const HEALTH_OPTS: { value: string; label: string }[] = [
-  { value: "", label: "All health" },
-  { value: "on_track", label: "On Track" },
-  { value: "needs_attention", label: "Needs Attention" },
-  { value: "critical", label: "Critical" },
-  { value: "no_data", label: "No Data" },
+type Mode = "weekly" | "monthly";
+
+const BANDS: { key: Health; label: string }[] = [
+  { key: "critical", label: "Critical" },
+  { key: "needs_attention", label: "Needs Attention" },
+  { key: "on_track", label: "On Track" },
+  { key: "no_data", label: "No Data" },
 ];
 
-const _now = new Date();
-const today = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, "0")}-${String(_now.getDate()).padStart(2, "0")}`;
+// Left-border accent + dot color per band
+const BAND_ACCENT: Record<Health, string> = {
+  critical: "hsl(var(--danger))",
+  needs_attention: "hsl(var(--warning))",
+  on_track: "hsl(var(--success))",
+  no_data: "hsl(var(--muted-foreground))",
+};
 
-type Window = "week" | "month";
+const BAND_LABEL_CLS: Record<Health, string> = {
+  critical: "text-danger",
+  needs_attention: "text-warning",
+  on_track: "text-success",
+  no_data: "text-muted-foreground",
+};
+
+function pctColor(p: number): string {
+  if (p >= 80) return "text-success";
+  if (p >= 50) return "text-warning";
+  return "text-danger";
+}
+
+function Chip({
+  count,
+  variant,
+}: {
+  count: number;
+  variant: "pend" | "sub" | "appr" | "rej";
+}) {
+  if (!count) return null;
+  const cls: Record<string, string> = {
+    pend: "bg-muted text-muted-foreground",
+    sub: "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
+    appr: "bg-success/10 text-success",
+    rej: "bg-danger/10 text-danger",
+  };
+  const label: Record<string, string> = {
+    pend: "pend",
+    sub: "sub",
+    appr: "appr",
+    rej: "rej",
+  };
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums",
+        cls[variant],
+      )}
+    >
+      {count} {label[variant]}
+    </span>
+  );
+}
 
 export function HealthTableClient({ rows }: { rows: CampaignHealthRow[] }) {
-  const [search, setSearch] = useState("");
-  const [healthFilter, setHealthFilter] = useState<Health | "">("");
-  const [campaignIds, setCampaignIds] = useState<string[]>([]);
-  const [deptFilter, setDeptFilter] = useState("");
-  const [activeOnly, setActiveOnly] = useState(false);
-  const [window, setWindow] = useState<Window>("week");
-
-  // Build department options from all rows
-  const deptOptions = useMemo(() => {
-    const seen = new Set<string>();
-    const opts: { value: string; label: string }[] = [{ value: "", label: "All departments" }];
-    for (const r of rows) {
-      for (const d of r.departmentNames) {
-        if (!seen.has(d)) {
-          seen.add(d);
-          opts.push({ value: d, label: d });
-        }
-      }
-    }
-    return opts;
-  }, [rows]);
-
-  const campaignOptions = useMemo(
-    () => rows.map((r) => ({ id: r.id, label: r.name })),
-    [rows],
-  );
-
-  const submissionPct = (r: CampaignHealthRow) =>
-    window === "week" ? r.submissionPctWeek : r.submissionPctMonth;
-  const health = (r: CampaignHealthRow) =>
-    window === "week" ? r.healthWeek : r.healthMonth;
-
-  const filtered = rows.filter((r) => {
-    if (campaignIds.length > 0 && !campaignIds.includes(r.id)) return false;
-    if (search && !r.name.toLowerCase().includes(search.toLowerCase())) return false;
-    if (healthFilter && health(r) !== healthFilter) return false;
-    if (deptFilter && !r.departmentNames.includes(deptFilter)) return false;
-    if (activeOnly) {
-      if (!r.startDate || !r.endDate) return false;
-      if (r.startDate > today || r.endDate < today) return false;
-    }
-    return true;
+  const [mode, setMode] = useState<Mode>("weekly");
+  const [dept, setDept] = useState("");
+  const [openBands, setOpenBands] = useState<Record<Health, boolean>>({
+    critical: true,
+    needs_attention: true,
+    on_track: false,
+    no_data: false,
   });
 
-  const hasFilters = search || healthFilter || campaignIds.length > 0 || deptFilter || activeOnly;
+  const toggleBand = (key: Health) =>
+    setOpenBands((prev) => ({ ...prev, [key]: !prev[key] }));
 
-  function clearAll() {
-    setSearch("");
-    setHealthFilter("");
-    setCampaignIds([]);
-    setDeptFilter("");
-    setActiveOnly(false);
-  }
+  // Campaigns matching the current frequency tab
+  const modeRows = useMemo(
+    () => rows.filter((r) => r.frequency === mode),
+    [rows, mode],
+  );
+
+  // Department pills derived from visible rows
+  const depts = useMemo(() => {
+    const seen = new Set<string>();
+    for (const r of modeRows)
+      for (const d of r.departmentNames) seen.add(d);
+    return [...seen].sort();
+  }, [modeRows]);
+
+  // Apply department filter
+  const visible = useMemo(
+    () =>
+      dept ? modeRows.filter((r) => r.departmentNames.includes(dept)) : modeRows,
+    [modeRows, dept],
+  );
+
+  // Per-row helpers keyed to mode
+  const getHealth = (r: CampaignHealthRow): Health =>
+    mode === "weekly" ? r.healthWeek : r.healthMonth;
+
+  const getSubPct = (r: CampaignHealthRow): number =>
+    mode === "weekly" ? r.submissionPctWeek : r.submissionPctMonth;
+
+  const getCounts = (r: CampaignHealthRow) =>
+    mode === "weekly"
+      ? {
+          pend: r.weekPending,
+          sub: r.weekSubmittedOnly,
+          appr: r.weekApproved,
+          rej: r.weekRejected,
+        }
+      : {
+          pend: r.monthPending,
+          sub: r.monthSubmittedOnly,
+          appr: r.monthApproved,
+          rej: r.monthRejected,
+        };
+
+  // Group rows into bands
+  const grouped = useMemo(() => {
+    const g: Record<Health, CampaignHealthRow[]> = {
+      critical: [],
+      needs_attention: [],
+      on_track: [],
+      no_data: [],
+    };
+    for (const r of visible) g[getHealth(r)].push(r);
+    return g;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, mode]);
 
   return (
-    <section className="mt-10">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+    <section className="mt-8">
+      {/* Header */}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-sm font-semibold text-foreground">Campaign health</h2>
 
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Week / Month toggle */}
-          <div className="flex rounded-xl border border-border bg-input p-0.5 text-sm">
-            {(["week", "month"] as Window[]).map((w) => (
-              <button
-                key={w}
-                type="button"
-                onClick={() => setWindow(w)}
-                className={cn(
-                  "rounded-lg px-3 py-1.5 font-medium capitalize transition-colors",
-                  window === w
-                    ? "bg-card text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {w === "week" ? "This Week" : "This Month"}
-              </button>
-            ))}
-          </div>
-
-          {/* Campaign multi-select */}
-          <div className="w-56">
-            <MultiSelect
-              options={campaignOptions}
-              selected={campaignIds}
-              onChange={setCampaignIds}
-              placeholder="All campaigns"
-              dropUp
-            />
-          </div>
-
-          {/* Department filter */}
-          {deptOptions.length > 1 && (
-            <select
-              value={deptFilter}
-              onChange={(e) => setDeptFilter(e.target.value)}
-              className="rounded-xl border border-transparent bg-input px-3 py-2 text-sm text-foreground focus:border-primary focus:bg-card focus:outline-none"
-            >
-              {deptOptions.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          )}
-
-          {/* Health filter */}
-          <select
-            value={healthFilter}
-            onChange={(e) => setHealthFilter(e.target.value as Health | "")}
-            className="rounded-xl border border-transparent bg-input px-3 py-2 text-sm text-foreground focus:border-primary focus:bg-card focus:outline-none"
-          >
-            {HEALTH_OPTS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-
-          {/* Active now toggle */}
-          <button
-            type="button"
-            onClick={() => setActiveOnly((v) => !v)}
-            className={cn(
-              "rounded-xl border px-3 py-2 text-sm transition-colors",
-              activeOnly
-                ? "border-primary bg-primary/10 font-medium text-primary"
-                : "border-transparent bg-input text-foreground hover:bg-muted",
-            )}
-          >
-            Active now
-          </button>
-
-          {/* Search */}
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search campaign…"
-              className="rounded-xl border border-transparent bg-input py-2 pl-9 pr-4 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
-            />
-          </div>
-
-          {hasFilters && (
+        {/* Frequency toggle */}
+        <div className="flex rounded-xl border border-border bg-input p-0.5">
+          {(["weekly", "monthly"] as Mode[]).map((m) => (
             <button
+              key={m}
               type="button"
-              onClick={clearAll}
-              className="rounded-xl border border-border px-3 py-2 text-xs text-muted-foreground hover:bg-muted"
+              onClick={() => {
+                setMode(m);
+                setDept("");
+              }}
+              className={cn(
+                "rounded-lg px-4 py-1.5 text-sm font-medium transition-colors",
+                mode === m
+                  ? "bg-card text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
             >
-              Clear
+              {m === "weekly" ? "Weekly Campaigns" : "Monthly Campaigns"}
             </button>
-          )}
+          ))}
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-2xl border border-border bg-card">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-              <th className="px-4 py-3 font-semibold">Campaign</th>
-              <th className="px-4 py-3 font-semibold">Execution</th>
-              <th className="px-4 py-3 font-semibold">Submission %</th>
-              <th className="px-4 py-3 font-semibold">Non-Rejection %</th>
-              <th className="px-4 py-3 font-semibold">Payout (₹)</th>
-              <th className="px-4 py-3 font-semibold">Health</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((r) => (
-              <tr key={r.id} className="border-b border-border last:border-0 hover:bg-muted/40">
-                <td className="px-4 py-3 font-medium">
-                  <Link href={`/campaigns/${r.id}`} className="text-foreground hover:text-primary">
-                    {r.name}
-                  </Link>
-                  {r.departmentNames.length > 0 && (
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      {r.departmentNames.join(", ")}
-                    </p>
-                  )}
-                </td>
-                <td className="px-4 py-3 text-muted-foreground">{r.executionTypeName ?? "—"}</td>
-                <td
+      {/* Department pills */}
+      {depts.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Dept
+          </span>
+          {(["", ...depts] as string[]).map((d) => (
+            <button
+              key={d || "__all__"}
+              type="button"
+              onClick={() => setDept(d)}
+              className={cn(
+                "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                dept === d
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border bg-card text-muted-foreground hover:border-muted-foreground hover:text-foreground",
+              )}
+            >
+              {d || "All"}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Banded sections */}
+      <div className="flex flex-col gap-2">
+        {BANDS.map((band) => {
+          const list = grouped[band.key];
+          const isOpen = openBands[band.key];
+
+          return (
+            <div
+              key={band.key}
+              className="overflow-hidden rounded-2xl border border-border bg-card"
+              style={{ borderLeftWidth: 3, borderLeftColor: BAND_ACCENT[band.key] }}
+            >
+              {/* Band header */}
+              <button
+                type="button"
+                onClick={() => toggleBand(band.key)}
+                className={cn(
+                  "flex w-full items-center gap-2.5 px-4 py-3 text-left hover:bg-muted/40",
+                  isOpen && "border-b border-border",
+                )}
+              >
+                <span
+                  className="h-2 w-2 flex-shrink-0 rounded-full"
+                  style={{ background: BAND_ACCENT[band.key] }}
+                />
+                <span
                   className={cn(
-                    "px-4 py-3",
-                    health(r) === "no_data"
-                      ? "text-muted-foreground"
-                      : submissionPct(r) < 50
-                        ? "text-danger"
-                        : "text-muted-foreground",
+                    "text-xs font-bold uppercase tracking-widest",
+                    BAND_LABEL_CLS[band.key],
                   )}
                 >
-                  {health(r) === "no_data" ? "—" : (
-                    <>
-                      {submissionPct(r)}%
-                      <span className="ml-1 text-xs text-muted-foreground">
-                        ({window === "week" ? `${r.weekSubmitted}/${r.weekTotal}` : `${r.monthSubmitted}/${r.monthTotal}`})
-                      </span>
-                    </>
+                  {band.label}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  &nbsp;·&nbsp;{list.length} campaign{list.length !== 1 ? "s" : ""}
+                </span>
+                <ChevronDown
+                  className={cn(
+                    "ml-auto h-3.5 w-3.5 text-muted-foreground transition-transform duration-200",
+                    isOpen && "rotate-180",
                   )}
-                </td>
-                <td className="px-4 py-3 text-muted-foreground">
-                  {health(r) === "no_data" ? "—" : `${r.nonRejectionPct}%`}
-                </td>
-                <td className="px-4 py-3 text-muted-foreground">
-                  ₹{r.payoutCommitted.toLocaleString("en-IN")}
-                </td>
-                <td className="px-4 py-3">
-                  <Link href={`/campaigns/${r.id}`}>
-                    <HealthBadge health={health(r)} />
-                  </Link>
-                </td>
-              </tr>
-            ))}
-            {filtered.length === 0 && (
-              <tr>
-                <td colSpan={6} className="p-8 text-center text-sm text-muted-foreground">
-                  {rows.length === 0 ? "No campaigns yet." : "No campaigns match the filters."}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+                />
+              </button>
+
+              {/* Campaign rows */}
+              {isOpen && (
+                <div>
+                  {list.length === 0 ? (
+                    <p className="px-4 py-5 text-center text-sm text-muted-foreground">
+                      None in this band.
+                    </p>
+                  ) : (
+                    list.map((r) => {
+                      const sp = getSubPct(r);
+                      const noData = getHealth(r) === "no_data";
+                      const c = getCounts(r);
+                      const hasAnychip = c.pend + c.sub + c.appr + c.rej > 0;
+
+                      return (
+                        <div
+                          key={r.id}
+                          className="flex items-center gap-3 border-b border-border px-4 py-2.5 last:border-0 hover:bg-muted/30"
+                        >
+                          {/* Campaign name */}
+                          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+                            {r.name}
+                          </span>
+
+                          {/* Execution type tag */}
+                          {r.executionTypeName && (
+                            <span className="flex-shrink-0 whitespace-nowrap rounded bg-input px-1.5 py-0.5 text-xs text-muted-foreground">
+                              {r.executionTypeName}
+                            </span>
+                          )}
+
+                          {/* Status chips */}
+                          {hasAnychip && (
+                            <div className="flex flex-shrink-0 items-center gap-1">
+                              <Chip count={c.pend} variant="pend" />
+                              <Chip count={c.sub} variant="sub" />
+                              <Chip count={c.appr} variant="appr" />
+                              <Chip count={c.rej} variant="rej" />
+                            </div>
+                          )}
+
+                          {/* Sub rate + non-rej stats */}
+                          <div className="flex flex-shrink-0 items-stretch gap-0 border-l border-border pl-3">
+                            <div className="flex flex-col items-end border-r border-border pr-3">
+                              <span
+                                className={cn(
+                                  "text-xs font-bold tabular-nums",
+                                  noData ? "text-muted-foreground" : pctColor(sp),
+                                )}
+                              >
+                                {noData ? "—" : `${sp}%`}
+                              </span>
+                              <span className="text-xs text-muted-foreground">sub rate</span>
+                            </div>
+                            <div className="flex flex-col items-end pl-3">
+                              <span
+                                className={cn(
+                                  "text-xs font-bold tabular-nums",
+                                  r.reviewedCount === 0
+                                    ? "text-muted-foreground"
+                                    : pctColor(r.nonRejectionPct),
+                                )}
+                              >
+                                {r.reviewedCount === 0 ? "—" : `${r.nonRejectionPct}%`}
+                              </span>
+                              <span className="text-xs text-muted-foreground">non-rej</span>
+                            </div>
+                          </div>
+
+                          {/* Summary link */}
+                          <Link
+                            href={`/summary?campaign=${r.id}`}
+                            className="flex-shrink-0 rounded border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:border-muted-foreground hover:text-foreground"
+                          >
+                            Summary →
+                          </Link>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
+
+      {visible.length === 0 && (
+        <p className="mt-4 text-center text-sm text-muted-foreground">
+          No {mode} campaigns found.
+        </p>
+      )}
+
       <p className="mt-2 text-xs text-muted-foreground">
-        Submission % is based on tasks due within the selected window. Click a row for the detailed view.
+        Submission % is based on tasks due in the current{" "}
+        {mode === "weekly" ? "week" : "month"}.
       </p>
     </section>
   );
