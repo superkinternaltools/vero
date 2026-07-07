@@ -9,6 +9,7 @@ export type CampaignHealthRow = {
   id: string;
   name: string;
   frequency: string;
+  status: string;
   executionTypeName: string | null;
   departmentNames: string[];
   startDate: string | null;
@@ -24,11 +25,13 @@ export type CampaignHealthRow = {
   weekSubmittedOnly: number;
   weekApproved: number;
   weekRejected: number;
+  weekNotDone: number;
   // per-status counts for the month window
   monthPending: number;
   monthSubmittedOnly: number;
   monthApproved: number;
   monthRejected: number;
+  monthNotDone: number;
   nonRejectionPct: number;
   reviewedCount: number;
   payoutCommitted: number;
@@ -126,7 +129,7 @@ export async function getCampaignHealthRows(): Promise<CampaignHealthRow[]> {
     supabase
       .from("campaigns")
       .select(
-        "id, name, frequency, start_date, end_date, payout_enabled, payout_amount, execution_types ( name ), campaign_departments ( departments ( name ) ), campaign_stores ( store_id )",
+        "id, name, frequency, status, start_date, end_date, payout_enabled, payout_amount, execution_types ( name ), campaign_departments ( departments ( name ) ), campaign_stores ( store_id )",
       )
       .is("deleted_at", null)
       .order("created_at", { ascending: false }),
@@ -158,11 +161,13 @@ export async function getCampaignHealthRows(): Promise<CampaignHealthRow[]> {
     const weekSubmittedOnly = weekTasks.filter((x) => x.status === "submitted").length;
     const weekApproved = weekTasks.filter((x) => x.status === "approved").length;
     const weekRejected = weekTasks.filter((x) => x.status === "rejected").length;
+    const weekNotDone = weekTasks.filter((x) => x.status === "not_done").length;
 
     const monthPending = monthTasks.filter((x) => x.status === "pending").length;
     const monthSubmittedOnly = monthTasks.filter((x) => x.status === "submitted").length;
     const monthApproved = monthTasks.filter((x) => x.status === "approved").length;
     const monthRejected = monthTasks.filter((x) => x.status === "rejected").length;
+    const monthNotDone = monthTasks.filter((x) => x.status === "not_done").length;
 
     const reviewed = cs.filter((x) => x.human_verdict).length;
     const rejected = cs.filter((x) => x.human_verdict === "rejected").length;
@@ -191,6 +196,7 @@ export async function getCampaignHealthRows(): Promise<CampaignHealthRow[]> {
       id: c.id,
       name: c.name,
       frequency: c.frequency,
+      status: c.status ?? "active",
       executionTypeName: c.execution_types?.name ?? null,
       departmentNames: (c.campaign_departments ?? [])
         .map((d: any) => d.departments?.name)
@@ -207,10 +213,12 @@ export async function getCampaignHealthRows(): Promise<CampaignHealthRow[]> {
       weekSubmittedOnly,
       weekApproved,
       weekRejected,
+      weekNotDone,
       monthPending,
       monthSubmittedOnly,
       monthApproved,
       monthRejected,
+      monthNotDone,
       nonRejectionPct: pct(reviewed - rejected, reviewed),
       reviewedCount: reviewed,
       payoutCommitted: c.payout_enabled ? approvedCycles * Number(c.payout_amount) : 0,
