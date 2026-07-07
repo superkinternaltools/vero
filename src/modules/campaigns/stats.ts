@@ -118,6 +118,21 @@ function currentMonthWindow(): { monthStart: string; monthEnd: string } {
   };
 }
 
+/** Fetches all rows from a paginated Supabase query, bypassing the default 1000-row cap. */
+async function fetchAllRows(
+  buildQuery: (from: number, to: number) => PromiseLike<{ data: any[] | null; error: any }>,
+  pageSize = 1000,
+): Promise<any[]> {
+  const results: any[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await buildQuery(from, from + pageSize - 1);
+    if (error || !data || data.length === 0) break;
+    results.push(...data);
+    if (data.length < pageSize) break;
+  }
+  return results;
+}
+
 export async function getCampaignHealthRows(): Promise<CampaignHealthRow[]> {
   const supabase = await createClient();
   const admin = createAdminClient();
@@ -125,7 +140,7 @@ export async function getCampaignHealthRows(): Promise<CampaignHealthRow[]> {
   const { weekStart, weekEnd } = currentWeekWindow();
   const { monthStart, monthEnd } = currentMonthWindow();
 
-  const [{ data: campaigns }, { data: tasks }, { data: subs }] = await Promise.all([
+  const [{ data: campaigns }, tasks, subs] = await Promise.all([
     supabase
       .from("campaigns")
       .select(
@@ -133,18 +148,25 @@ export async function getCampaignHealthRows(): Promise<CampaignHealthRow[]> {
       )
       .is("deleted_at", null)
       .order("created_at", { ascending: false }),
-    admin
-      .from("tasks")
-      .select("campaign_id, status, due_date")
-      .gte("due_date", monthStart)
-      .lte("due_date", monthEnd)
-      .order("campaign_id")
-      .limit(100000),
-    admin.from("submissions").select("campaign_id, human_verdict, status").limit(10000),
+    fetchAllRows((from, to) =>
+      admin
+        .from("tasks")
+        .select("campaign_id, status, due_date")
+        .gte("due_date", monthStart)
+        .lte("due_date", monthEnd)
+        .order("campaign_id")
+        .range(from, to),
+    ),
+    fetchAllRows((from, to) =>
+      admin
+        .from("submissions")
+        .select("campaign_id, human_verdict, status")
+        .range(from, to),
+    ),
   ]);
 
-  const T = (tasks as any[]) ?? [];
-  const S = (subs as any[]) ?? [];
+  const T = tasks;
+  const S = subs;
   const SUBMITTED = ["submitted", "approved", "rejected"];
 
   return ((campaigns as any[]) ?? []).map((c) => {
