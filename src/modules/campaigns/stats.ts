@@ -133,12 +133,21 @@ async function fetchAllRows(
   return results;
 }
 
-export async function getCampaignHealthRows(): Promise<CampaignHealthRow[]> {
+export async function getCampaignHealthRows(opts?: {
+  weekStart: string;
+  weekEnd: string;
+  monthStart: string;
+  monthEnd: string;
+}): Promise<CampaignHealthRow[]> {
   const supabase = await createClient();
   const admin = createAdminClient();
   const t = await getThresholds();
-  const { weekStart, weekEnd } = currentWeekWindow();
-  const { monthStart, monthEnd } = currentMonthWindow();
+  const { weekStart, weekEnd } = opts
+    ? { weekStart: opts.weekStart, weekEnd: opts.weekEnd }
+    : currentWeekWindow();
+  const { monthStart, monthEnd } = opts
+    ? { monthStart: opts.monthStart, monthEnd: opts.monthEnd }
+    : currentMonthWindow();
 
   const [{ data: campaigns }, tasks, subs] = await Promise.all([
     supabase

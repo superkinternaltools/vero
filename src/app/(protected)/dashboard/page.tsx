@@ -23,7 +23,7 @@ async function getKpis() {
 export default async function DashboardPage() {
   const profile = await getCurrentProfile();
   const access = await getAccess();
-  const showCampaigns = access?.allowed.includes("campaigns") ?? false;
+  const showCampaigns = access?.allowed.includes("dashboard") ?? false;
 
   const [kpis, healthRows] = await Promise.all([
     getKpis(),

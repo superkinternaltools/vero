@@ -1,13 +1,15 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import Link from "next/link";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/core/lib/utils";
 import type { CampaignHealthRow, Health } from "../stats";
+import { fetchHealthRows } from "../health-actions";
 
 type Mode = "weekly" | "monthly";
 type Scope = "active" | "all";
+type WeekSel = "all" | "w1" | "w2" | "w3" | "w4";
 
 const BANDS: { key: Health; label: string }[] = [
   { key: "critical", label: "Critical" },
@@ -30,6 +32,19 @@ const BAND_LABEL_CLS: Record<Health, string> = {
   no_data: "text-muted-foreground",
 };
 
+const MONTH_LABELS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+const WEEKS: { value: WeekSel; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "w1", label: "W1" },
+  { value: "w2", label: "W2" },
+  { value: "w3", label: "W3" },
+  { value: "w4", label: "W4" },
+];
+
 function pctColor(p: number): string {
   if (p >= 80) return "text-success";
   if (p >= 50) return "text-warning";
@@ -40,6 +55,34 @@ function cantDoColor(p: number): string {
   if (p === 0) return "text-muted-foreground";
   if (p < 20) return "text-warning";
   return "text-danger";
+}
+
+function clientWeekWindow(year: number, month: number, week: WeekSel) {
+  const mm = String(month).padStart(2, "0");
+  if (week === "all") {
+    const last = new Date(year, month, 0).getDate();
+    return {
+      weekStart: `${year}-${mm}-01`,
+      weekEnd: `${year}-${mm}-${String(last).padStart(2, "0")}`,
+    };
+  }
+  const wn = parseInt(week[1]);
+  const startDay = (wn - 1) * 7 + 1;
+  const last = new Date(year, month, 0).getDate();
+  const endDay = wn === 4 ? last : wn * 7;
+  return {
+    weekStart: `${year}-${mm}-${String(startDay).padStart(2, "0")}`,
+    weekEnd: `${year}-${mm}-${String(endDay).padStart(2, "0")}`,
+  };
+}
+
+function clientMonthWindow(year: number, month: number) {
+  const last = new Date(year, month, 0).getDate();
+  const mm = String(month).padStart(2, "0");
+  return {
+    monthStart: `${year}-${mm}-01`,
+    monthEnd: `${year}-${mm}-${String(last).padStart(2, "0")}`,
+  };
 }
 
 function Chip({
@@ -76,7 +119,29 @@ function Chip({
   );
 }
 
-export function HealthTableClient({ rows }: { rows: CampaignHealthRow[] }) {
+export function HealthTableClient({ rows: initialRows }: { rows: CampaignHealthRow[] }) {
+  // Stable "now" snapshot — computed once per mount
+  const [nowInfo] = useState(() => {
+    const d = new Date();
+    const day = d.getDate();
+    return {
+      year: d.getFullYear(),
+      month: d.getMonth() + 1, // 1-indexed
+      weekNum: day <= 7 ? 1 : day <= 14 ? 2 : day <= 21 ? 3 : 4,
+    };
+  });
+  const { year: nowYear, month: nowMonth, weekNum: nowWeekNum } = nowInfo;
+
+  // Period selection state
+  const [selYear, setSelYear] = useState(nowYear);
+  const [selMonth, setSelMonth] = useState(nowMonth);
+  const [selWeek, setSelWeek] = useState<WeekSel>(`w${nowWeekNum}` as WeekSel);
+
+  // Data state — starts with server-provided initial rows
+  const [displayRows, setDisplayRows] = useState<CampaignHealthRow[]>(initialRows);
+  const [loading, setLoading] = useState(false);
+
+  // Existing UI state
   const [mode, setMode] = useState<Mode>("weekly");
   const [scope, setScope] = useState<Scope>("active");
   const [dept, setDept] = useState("");
@@ -90,10 +155,59 @@ export function HealthTableClient({ rows }: { rows: CampaignHealthRow[] }) {
   const toggleBand = (key: Health) =>
     setOpenBands((prev) => ({ ...prev, [key]: !prev[key] }));
 
+  // Month dropdown options — last 6 months including current
+  const monthOptions = useMemo(() => {
+    const opts = [];
+    for (let i = 0; i < 6; i++) {
+      const d = new Date(nowYear, nowMonth - 1 - i, 1);
+      const y = d.getFullYear();
+      const m = d.getMonth() + 1;
+      opts.push({
+        year: y,
+        month: m,
+        label: `${MONTH_LABELS[d.getMonth()]} '${String(y).slice(2)}${i === 0 ? " (current)" : ""}`,
+        value: `${y}-${String(m).padStart(2, "0")}`,
+      });
+    }
+    return opts;
+  }, [nowYear, nowMonth]);
+
+  const selMonthValue = `${selYear}-${String(selMonth).padStart(2, "0")}`;
+
+  function isFutureWeek(w: WeekSel): boolean {
+    if (w === "all") return false;
+    if (selYear !== nowYear || selMonth !== nowMonth) return false;
+    return parseInt(w[1]) > nowWeekNum;
+  }
+
+  function handleMonthChange(value: string) {
+    const [y, m] = value.split("-").map(Number);
+    const isCurrent = y === nowYear && m === nowMonth;
+    setSelYear(y);
+    setSelMonth(m);
+    setSelWeek(isCurrent ? (`w${nowWeekNum}` as WeekSel) : "all");
+  }
+
+  // Re-fetch rows whenever the selected period changes (skip initial mount)
+  const didMount = useRef(false);
+  useEffect(() => {
+    if (!didMount.current) {
+      didMount.current = true;
+      return;
+    }
+    const ww = clientWeekWindow(selYear, selMonth, selWeek);
+    const mw = clientMonthWindow(selYear, selMonth);
+    setLoading(true);
+    fetchHealthRows({ ...ww, ...mw })
+      .then((rows) => setDisplayRows(rows))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [selYear, selMonth, selWeek]);
+
   // 1. Filter by frequency tab
   const modeRows = useMemo(
-    () => rows.filter((r) => r.frequency === mode),
-    [rows, mode],
+    () => displayRows.filter((r) => r.frequency === mode),
+    [displayRows, mode],
   );
 
   // 2. Filter by active / all
@@ -121,6 +235,18 @@ export function HealthTableClient({ rows }: { rows: CampaignHealthRow[] }) {
         : scopedRows,
     [scopedRows, activeDept],
   );
+
+  // Period label for footer note
+  const periodLabel = useMemo(() => {
+    const mStr = `${MONTH_LABELS[selMonth - 1]} '${String(selYear).slice(2)}`;
+    if (mode === "monthly") return mStr;
+    if (selWeek === "all") return mStr;
+    const isCurrent =
+      selYear === nowYear &&
+      selMonth === nowMonth &&
+      selWeek === (`w${nowWeekNum}` as WeekSel);
+    return isCurrent ? "the current week" : `${selWeek.toUpperCase()} of ${mStr}`;
+  }, [selYear, selMonth, selWeek, mode, nowYear, nowMonth, nowWeekNum]);
 
   // Helpers keyed to current mode
   const getHealth = (r: CampaignHealthRow): Health =>
@@ -169,6 +295,19 @@ export function HealthTableClient({ rows }: { rows: CampaignHealthRow[] }) {
         <h2 className="text-sm font-semibold text-foreground">Campaign health</h2>
 
         <div className="flex flex-wrap items-center gap-2">
+          {/* Month dropdown */}
+          <select
+            value={selMonthValue}
+            onChange={(e) => handleMonthChange(e.target.value)}
+            className="rounded-xl border border-transparent bg-input px-3 py-2 text-sm text-foreground focus:border-primary focus:bg-card focus:outline-none"
+          >
+            {monthOptions.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+
           {/* Scope dropdown */}
           <select
             value={scope}
@@ -203,6 +342,47 @@ export function HealthTableClient({ rows }: { rows: CampaignHealthRow[] }) {
         </div>
       </div>
 
+      {/* Week pills — only on Weekly tab */}
+      {mode === "weekly" && (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Week
+          </span>
+          {WEEKS.map(({ value: w, label }) => {
+            const future = isFutureWeek(w);
+            const isSelected = selWeek === w;
+            const isCurWeek =
+              w !== "all" &&
+              selYear === nowYear &&
+              selMonth === nowMonth &&
+              parseInt(w[1]) === nowWeekNum;
+            return (
+              <button
+                key={w}
+                type="button"
+                disabled={future}
+                onClick={() => !future && setSelWeek(w)}
+                className={cn(
+                  "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                  isSelected && !future
+                    ? "border-foreground bg-foreground text-background"
+                    : "border-border bg-card text-muted-foreground hover:border-muted-foreground hover:text-foreground",
+                  future && "cursor-not-allowed opacity-35 hover:border-border hover:text-muted-foreground",
+                )}
+              >
+                {label}
+                {isCurWeek && !isSelected && (
+                  <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-primary align-middle" />
+                )}
+                {isCurWeek && isSelected && (
+                  <span className="ml-1 text-[10px] opacity-70">now</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Department pills */}
       {depts.length > 0 && (
         <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -228,7 +408,7 @@ export function HealthTableClient({ rows }: { rows: CampaignHealthRow[] }) {
       )}
 
       {/* Banded sections */}
-      <div className="flex flex-col gap-2">
+      <div className={cn("flex flex-col gap-2 transition-opacity duration-200", loading && "pointer-events-none opacity-50")}>
         {BANDS.map((band) => {
           const list = grouped[band.key];
           const isOpen = openBands[band.key];
@@ -375,15 +555,14 @@ export function HealthTableClient({ rows }: { rows: CampaignHealthRow[] }) {
         })}
       </div>
 
-      {visible.length === 0 && (
+      {visible.length === 0 && !loading && (
         <p className="mt-4 text-center text-sm text-muted-foreground">
           No {mode} campaigns found.{scope === "active" ? ' Switch to "All campaigns" to see past campaigns.' : ""}
         </p>
       )}
 
       <p className="mt-2 text-xs text-muted-foreground">
-        Sub rate and can&apos;t do % are based on tasks due in the current{" "}
-        {mode === "weekly" ? "week" : "month"}. Non-rej % is all-time.
+        Sub rate and can&apos;t do % are based on tasks due in {periodLabel}. Non-rej % is all-time.
       </p>
     </section>
   );
