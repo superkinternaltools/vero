@@ -2,12 +2,29 @@ import { createClient } from "@/core/db/server";
 import type { PayoutTier } from "@/modules/campaigns/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+export type SubmissionEntry = {
+  id: string;
+  photos: string[];
+  aiScore: number | null;
+  aiVerdict: string | null;
+  aiAssessment: string | null;
+  humanVerdict: string | null;
+  rejectionReason: string | null;
+  geofenceFlag: boolean;
+  duplicateFlag: boolean;
+  geofenceDistanceM: number | null;
+  payoutTierLabel: string | null;
+  submittedAt: string | null;
+  submittedByName: string | null;
+};
+
 export type CellData = {
   taskId: string;
   status: string;
   photos: string[];
   submissionId: string | null;
   submittedByName: string | null;
+  submittedAt: string | null;
   aiScore: number | null;
   aiVerdict: string | null;
   aiAssessment: string | null;
@@ -19,6 +36,7 @@ export type CellData = {
   payoutTierLabel: string | null;
   nonSubmissionReason: string | null;
   nonSubmissionAcknowledged: boolean;
+  allSubmissions: SubmissionEntry[];
 };
 
 export type Matrix = {
@@ -41,6 +59,19 @@ export async function listCampaignOptions(): Promise<{ id: string; name: string;
   return (data as { id: string; name: string; status: string }[]) ?? [];
 }
 
+function rankSub(s: any, payoutTiers: PayoutTier[]): number {
+  if (s.human_verdict === "approved") {
+    if (s.payout_tier_label) {
+      const tier = payoutTiers.find((t) => t.label === s.payout_tier_label);
+      return 3000 + (tier?.pct ?? 0);
+    }
+    return 3000;
+  }
+  if (s.human_verdict === "rejected") return 2000;
+  if (s.ai_score != null) return 1000 + Number(s.ai_score);
+  return 0;
+}
+
 export async function getCampaignMatrix(id: string): Promise<Matrix | null> {
   const supabase = await createClient();
   const { data: campaign } = await supabase
@@ -49,6 +80,9 @@ export async function getCampaignMatrix(id: string): Promise<Matrix | null> {
     .eq("id", id)
     .maybeSingle();
   if (!campaign) return null;
+
+  const c = campaign as any;
+  const payoutTiers: PayoutTier[] = c.payout_tiers ?? [];
 
   const { data: tasks } = await supabase
     .from("tasks")
@@ -69,28 +103,50 @@ export async function getCampaignMatrix(id: string): Promise<Matrix | null> {
   for (const t of (tasks as any[]) ?? []) {
     storeMap.set(t.store_id, t.stores?.name ?? "—");
     cycleSet.add(t.due_date);
-    const subs = (t.submissions ?? []).slice().sort((a: any, b: any) =>
-      (b.created_at ?? "").localeCompare(a.created_at ?? ""),
-    );
-    const latest = subs[0];
+
+    // Sort best-first: human approved (highest tier) > rejected > AI scored > none.
+    // Within same rank, latest created_at wins.
+    const subs = (t.submissions ?? []).slice().sort((a: any, b: any) => {
+      const rankDiff = rankSub(b, payoutTiers) - rankSub(a, payoutTiers);
+      if (rankDiff !== 0) return rankDiff;
+      return (b.created_at ?? "").localeCompare(a.created_at ?? "");
+    });
+    const best = subs[0];
+
     cells[t.store_id] = cells[t.store_id] ?? {};
     cells[t.store_id][t.due_date] = {
       taskId: t.id,
       status: t.status,
-      photos: latest?.photos ?? [],
-      submissionId: latest?.id ?? null,
-      submittedByName: latest?.profiles?.display_name ?? null,
-      aiScore: latest?.ai_score ?? null,
-      aiVerdict: latest?.ai_verdict ?? null,
-      aiAssessment: latest?.ai_assessment ?? null,
-      humanVerdict: latest?.human_verdict ?? null,
-      rejectionReason: latest?.rejection_reason ?? null,
-      geofenceFlag: latest?.geofence_flag ?? false,
-      duplicateFlag: latest?.duplicate_flag ?? false,
-      geofenceDistanceM: latest?.geofence_distance_m ?? null,
-      payoutTierLabel: latest?.payout_tier_label ?? null,
+      photos: best?.photos ?? [],
+      submissionId: best?.id ?? null,
+      submittedByName: best?.profiles?.display_name ?? null,
+      submittedAt: best?.created_at ?? null,
+      aiScore: best?.ai_score ?? null,
+      aiVerdict: best?.ai_verdict ?? null,
+      aiAssessment: best?.ai_assessment ?? null,
+      humanVerdict: best?.human_verdict ?? null,
+      rejectionReason: best?.rejection_reason ?? null,
+      geofenceFlag: best?.geofence_flag ?? false,
+      duplicateFlag: best?.duplicate_flag ?? false,
+      geofenceDistanceM: best?.geofence_distance_m ?? null,
+      payoutTierLabel: best?.payout_tier_label ?? null,
       nonSubmissionReason: t.non_submission_reason ?? null,
       nonSubmissionAcknowledged: t.non_submission_acknowledged ?? false,
+      allSubmissions: subs.map((s: any) => ({
+        id: s.id,
+        photos: s.photos ?? [],
+        aiScore: s.ai_score ?? null,
+        aiVerdict: s.ai_verdict ?? null,
+        aiAssessment: s.ai_assessment ?? null,
+        humanVerdict: s.human_verdict ?? null,
+        rejectionReason: s.rejection_reason ?? null,
+        geofenceFlag: s.geofence_flag ?? false,
+        duplicateFlag: s.duplicate_flag ?? false,
+        geofenceDistanceM: s.geofence_distance_m ?? null,
+        payoutTierLabel: s.payout_tier_label ?? null,
+        submittedAt: s.created_at ?? null,
+        submittedByName: s.profiles?.display_name ?? null,
+      })),
     };
   }
 
@@ -99,7 +155,6 @@ export async function getCampaignMatrix(id: string): Promise<Matrix | null> {
     .sort((a, b) => a.name.localeCompare(b.name));
   const cycles = [...cycleSet].sort();
 
-  const c = campaign as any;
   return {
     campaignName: c.name,
     payoutModel: c.payout_model ?? "binary",

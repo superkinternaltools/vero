@@ -52,6 +52,11 @@ function cycleLabel(t: TaskRow) {
   return `${fmtDate(t.cycleStart)} – ${fmtDate(t.cycleEnd)}`;
 }
 
+function isInCycleWindow(t: TaskRow): boolean {
+  const today = new Date().toISOString().split("T")[0];
+  return today >= t.cycleStart && today <= t.cycleEnd;
+}
+
 async function sha256(file: File): Promise<string> {
   const buf = await file.arrayBuffer();
   const hash = await crypto.subtle.digest("SHA-256", buf);
@@ -482,14 +487,21 @@ export function TasksClient({
                   {STATUS_LABELS[t.status] ?? t.status}
                 </span>
               </div>
-              <div className="mt-3 text-center">
-                <button
-                  type="button"
-                  onClick={() => setViewTask(t)}
-                  className="text-xs text-muted-foreground underline hover:text-foreground"
-                >
-                  View submitted photo
-                </button>
+              <div className="mt-3 space-y-2">
+                {(isAdmin || isInCycleWindow(t)) && (
+                  <Button variant="outline" className="w-full" size="md" onClick={() => open(t)}>
+                    Re-submit
+                  </Button>
+                )}
+                <div className="text-center">
+                  <button
+                    type="button"
+                    onClick={() => setViewTask(t)}
+                    className="text-xs text-muted-foreground underline hover:text-foreground"
+                  >
+                    View submitted photo
+                  </button>
+                </div>
               </div>
             </div>
           ))}
@@ -510,7 +522,7 @@ export function TasksClient({
           <div className="relative z-10 max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-border bg-card p-6 shadow-xl">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-semibold text-foreground">
-                {active.status === "rejected" ? "Re-upload Execution Photo" : "Upload Execution Photo"}
+                {active.status === "rejected" ? "Re-upload Execution Photo" : active.status === "approved" ? "Re-submit Execution Photo" : "Upload Execution Photo"}
               </h2>
               <button type="button" onClick={() => setActive(null)} aria-label="Close" className="rounded-lg p-1 text-muted-foreground hover:bg-muted">
                 <X className="h-4 w-4" />
@@ -521,6 +533,12 @@ export function TasksClient({
               <div className="mb-4 rounded-xl border border-danger/30 bg-danger/5 p-3">
                 <p className="text-sm font-medium text-danger">Rejected: {active.rejectionReason}</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">Fix the issue above before re-uploading.</p>
+              </div>
+            )}
+            {active.status === "approved" && (
+              <div className="mb-4 rounded-xl border border-success/30 bg-success/5 p-3">
+                <p className="text-sm font-medium text-success">This task is already approved.</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">A new submission will go back for review and replace the current approval if it scores better.</p>
               </div>
             )}
 

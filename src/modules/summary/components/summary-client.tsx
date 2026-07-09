@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Download, X, ZoomIn, MapPin, Copy, Search, Flag } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, X, ZoomIn, MapPin, Copy, Search, Flag } from "lucide-react";
 import { Button } from "@/core/ui/button";
 import { cn } from "@/core/lib/utils";
 import type { Matrix, CellData } from "../queries";
@@ -70,6 +70,18 @@ function cellDisplay(
   return CELL[c.status] ?? { label: c.status, cls: "bg-muted text-muted-foreground" };
 }
 
+function fmtDateTime(iso: string): string {
+  return new Date(iso).toLocaleString("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "Asia/Kolkata",
+  });
+}
+
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
 function cycleLabel(d: string): string {
@@ -126,6 +138,7 @@ export function SummaryClient({
   const router = useRouter();
   const [pending, start] = useTransition();
   const [cell, setCell] = useState<{ data: CellData; store: string; cycle: string } | null>(null);
+  const [subIdx, setSubIdx] = useState(0);
   const [rejecting, setRejecting] = useState(false);
   const [selectedTier, setSelectedTier] = useState<PayoutTier | null>(null);
   const [reason, setReason] = useState("");
@@ -210,6 +223,7 @@ export function SummaryClient({
   function openCell(storeName: string, cycle: string, data: CellData | undefined) {
     if (!data) return;
     setCell({ data, store: storeName, cycle });
+    setSubIdx(0);
     setRejecting(false);
     setSelectedTier(null);
     setReason("");
@@ -217,29 +231,29 @@ export function SummaryClient({
   }
 
   function approve() {
-    if (!cell?.data.submissionId) return;
+    if (!activeSubId) return;
     start(async () => {
-      const res = await approveSubmission(cell.data.submissionId!);
+      const res = await approveSubmission(activeSubId);
       if (res?.error) setError(res.error);
       else { setCell(null); router.refresh(); }
     });
   }
 
   function reject() {
-    if (!cell?.data.submissionId) return;
+    if (!activeSubId) return;
     if (!reason) { setError("Pick a reason."); return; }
     start(async () => {
-      const res = await rejectSubmission(cell.data.submissionId!, reason);
+      const res = await rejectSubmission(activeSubId, reason);
       if (res?.error) setError(res.error);
       else { setCell(null); router.refresh(); }
     });
   }
 
   function chooseTier(t: PayoutTier) {
-    if (!cell?.data.submissionId) return;
+    if (!activeSubId) return;
     if (t.pct > 0) {
       start(async () => {
-        const res = await selectPayoutTier(cell.data.submissionId!, t.label, t.pct);
+        const res = await selectPayoutTier(activeSubId, t.label, t.pct);
         if (res?.error) setError(res.error);
         else { setCell(null); router.refresh(); }
       });
@@ -251,10 +265,10 @@ export function SummaryClient({
   }
 
   function confirmTier() {
-    if (!cell?.data.submissionId || !selectedTier) return;
+    if (!activeSubId || !selectedTier) return;
     if (!reason) { setError("Pick a reason."); return; }
     start(async () => {
-      const res = await selectPayoutTier(cell.data.submissionId!, selectedTier.label, selectedTier.pct, reason);
+      const res = await selectPayoutTier(activeSubId, selectedTier.label, selectedTier.pct, reason);
       if (res?.error) setError(res.error);
       else { setCell(null); router.refresh(); }
     });
@@ -279,27 +293,27 @@ export function SummaryClient({
   }
 
   function clearGeoFlag() {
-    if (!cell?.data.submissionId) return;
+    if (!activeSubId) return;
     start(async () => {
-      const res = await closeGeofenceFlag(cell.data.submissionId!);
+      const res = await closeGeofenceFlag(activeSubId);
       if (res?.error) setError(res.error);
       else router.refresh();
     });
   }
 
   function clearDupFlag() {
-    if (!cell?.data.submissionId) return;
+    if (!activeSubId) return;
     start(async () => {
-      const res = await closeDuplicateFlag(cell.data.submissionId!);
+      const res = await closeDuplicateFlag(activeSubId);
       if (res?.error) setError(res.error);
       else router.refresh();
     });
   }
 
   function retryAi() {
-    if (!cell?.data.submissionId) return;
+    if (!activeSubId) return;
     start(async () => {
-      const res = await retryAiScoring(cell.data.submissionId!);
+      const res = await retryAiScoring(activeSubId);
       if (res?.error) setError(res.error);
       else router.refresh();
     });
@@ -328,7 +342,23 @@ export function SummaryClient({
       )
     : [];
 
-  const currentVerdict = cell ? (cell.data.humanVerdict ?? cell.data.aiVerdict) : null;
+  // Derived variables for the currently-viewed submission in the modal.
+  const allSubs = cell?.data.allSubmissions ?? [];
+  const currentSub = allSubs.length > 0 ? (allSubs[subIdx] ?? allSubs[0]) : null;
+  const activeSubId = currentSub?.id ?? cell?.data.submissionId ?? null;
+  const viewPhotos = currentSub?.photos ?? cell?.data.photos ?? [];
+  const viewAiScore = currentSub ? currentSub.aiScore : (cell?.data.aiScore ?? null);
+  const viewAiVerdict = currentSub ? currentSub.aiVerdict : (cell?.data.aiVerdict ?? null);
+  const viewAiAssessment = currentSub ? currentSub.aiAssessment : (cell?.data.aiAssessment ?? null);
+  const viewHumanVerdict = currentSub ? currentSub.humanVerdict : (cell?.data.humanVerdict ?? null);
+  const viewRejectionReason = currentSub ? currentSub.rejectionReason : (cell?.data.rejectionReason ?? null);
+  const viewGeofenceFlag = currentSub ? currentSub.geofenceFlag : (cell?.data.geofenceFlag ?? false);
+  const viewDuplicateFlag = currentSub ? currentSub.duplicateFlag : (cell?.data.duplicateFlag ?? false);
+  const viewGeofenceDistanceM = currentSub ? currentSub.geofenceDistanceM : (cell?.data.geofenceDistanceM ?? null);
+  const viewPayoutTierLabel = currentSub ? currentSub.payoutTierLabel : (cell?.data.payoutTierLabel ?? null);
+  const viewSubmittedByName = currentSub ? currentSub.submittedByName : (cell?.data.submittedByName ?? null);
+  const viewSubmittedAt = currentSub?.submittedAt ?? null;
+  const currentVerdict = viewHumanVerdict ?? viewAiVerdict;
 
   return (
     <div>
@@ -705,19 +735,51 @@ export function SummaryClient({
               </button>
             </div>
 
+            {/* Multi-submission navigation */}
+            {allSubs.length > 1 && (
+              <div className="mb-3 flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2">
+                <button
+                  type="button"
+                  onClick={() => setSubIdx((i) => Math.max(0, i - 1))}
+                  disabled={subIdx === 0}
+                  className="rounded-lg p-1 text-muted-foreground hover:bg-muted disabled:opacity-40"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">
+                    Submission {subIdx + 1} of {allSubs.length}
+                  </span>
+                  {subIdx === 0 && (
+                    <span className="rounded-full bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success">
+                      Best
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSubIdx((i) => Math.min(allSubs.length - 1, i + 1))}
+                  disabled={subIdx === allSubs.length - 1}
+                  className="rounded-lg p-1 text-muted-foreground hover:bg-muted disabled:opacity-40"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+
             {/* Status + verdict */}
             <div className="flex flex-wrap items-center gap-2">
-              {matrix?.payoutModel === "tiered" && cell.data.payoutTierLabel ? (
-                <span className={cn("inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium", tierColor(matrix?.payoutTiers ?? [], cell.data.payoutTierLabel))}>
-                  {cell.data.payoutTierLabel}
+              {matrix?.payoutModel === "tiered" && viewPayoutTierLabel ? (
+                <span className={cn("inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium", tierColor(matrix?.payoutTiers ?? [], viewPayoutTierLabel))}>
+                  {viewPayoutTierLabel}
                 </span>
               ) : (
                 <span className={cn("inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium capitalize", CELL[cell.data.status]?.cls ?? "bg-muted text-muted-foreground")}>
                   {cell.data.status.replace("_", " ")}
                 </span>
               )}
-              {cell.data.aiScore != null && (
-                <span className="text-sm text-muted-foreground">AI score: {cell.data.aiScore}/10</span>
+              {viewAiScore != null && (
+                <span className="text-sm text-muted-foreground">AI score: {viewAiScore}/10</span>
               )}
               {currentVerdict && (
                 <span className={cn(
@@ -726,8 +788,8 @@ export function SummaryClient({
                     ? tierColor(matrix.payoutTiers, currentVerdict)
                     : currentVerdict === "approved" ? "bg-success/10 text-success" : "bg-danger/10 text-danger",
                 )}>
-                  {!cell.data.humanVerdict && "AI"} verdict: {currentVerdict}
-                  {!cell.data.humanVerdict && <span className="ml-1 opacity-60">(pending human)</span>}
+                  {!viewHumanVerdict && "AI"} verdict: {currentVerdict}
+                  {!viewHumanVerdict && <span className="ml-1 opacity-60">(pending human)</span>}
                 </span>
               )}
             </div>
@@ -761,7 +823,7 @@ export function SummaryClient({
               </div>
             )}
 
-            {isAdmin && matrix?.aiReview && cell.data.aiScore === null && cell.data.submissionId && (
+            {isAdmin && matrix?.aiReview && viewAiScore === null && activeSubId && (
               <div className="mt-3 rounded-xl border border-dashed border-border p-3">
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">AI Review</p>
                 <p className="mt-1 text-xs text-muted-foreground">No AI assessment available for this submission.</p>
@@ -771,41 +833,46 @@ export function SummaryClient({
               </div>
             )}
 
-            {isAdmin && cell.data.aiScore != null && (
+            {isAdmin && viewAiScore != null && (
               <div className="mt-3 rounded-xl border border-border p-3 text-sm text-muted-foreground">
                 <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-foreground">AI assessment</p>
                 <p>
-                  <span className="font-semibold text-foreground">{cell.data.aiScore}/10</span>
-                  {cell.data.aiVerdict && ` · ${cell.data.aiVerdict}`}
+                  <span className="font-semibold text-foreground">{viewAiScore}/10</span>
+                  {viewAiVerdict && ` · ${viewAiVerdict}`}
                 </p>
-                {cell.data.aiAssessment && (
+                {viewAiAssessment && (
                   <ul className="mt-1 list-inside list-disc whitespace-pre-line">
-                    {cell.data.aiAssessment}
+                    {viewAiAssessment}
                   </ul>
                 )}
               </div>
             )}
 
-            {cell.data.submittedByName && (
+            {viewSubmittedByName && (
               <p className="mt-2 text-sm text-muted-foreground">
-                Submitted by: <span className="font-medium text-foreground">{cell.data.submittedByName}</span>
+                Submitted by: <span className="font-medium text-foreground">{viewSubmittedByName}</span>
+              </p>
+            )}
+            {viewSubmittedAt && (
+              <p className="mt-1 text-sm text-muted-foreground">
+                Submitted at: <span className="font-medium text-foreground">{fmtDateTime(viewSubmittedAt)}</span>
               </p>
             )}
 
-            {cell.data.rejectionReason && (
-              <p className="mt-2 text-sm text-danger">{cell.data.rejectionReason}</p>
+            {viewRejectionReason && (
+              <p className="mt-2 text-sm text-danger">{viewRejectionReason}</p>
             )}
 
             {/* Flags */}
-            {(cell.data.geofenceFlag || cell.data.duplicateFlag) && (
+            {(viewGeofenceFlag || viewDuplicateFlag) && (
               <div className="mt-3 space-y-1.5 rounded-xl border border-warning/30 bg-warning/5 p-3">
                 <p className="text-xs font-semibold uppercase tracking-wide text-warning">Flags</p>
-                {cell.data.geofenceFlag && (
+                {viewGeofenceFlag && (
                   <div className="flex items-center justify-between">
                     <span className="flex items-center gap-1.5 text-sm text-foreground">
                       <MapPin className="h-3.5 w-3.5 text-warning" />
-                      {cell.data.geofenceDistanceM != null
-                        ? `${Math.round(cell.data.geofenceDistanceM)}m from store`
+                      {viewGeofenceDistanceM != null
+                        ? `${Math.round(viewGeofenceDistanceM)}m from store`
                         : "Outside geofence"}
                     </span>
                     {isAdmin && (
@@ -815,7 +882,7 @@ export function SummaryClient({
                     )}
                   </div>
                 )}
-                {cell.data.duplicateFlag && (
+                {viewDuplicateFlag && (
                   <div className="flex items-center justify-between">
                     <span className="flex items-center gap-1.5 text-sm text-foreground">
                       <Copy className="h-3.5 w-3.5 text-danger" />
@@ -832,9 +899,9 @@ export function SummaryClient({
             )}
 
             {/* Photos */}
-            {cell.data.photos.length > 0 && (
+            {viewPhotos.length > 0 && (
               <div className="mt-3 grid grid-cols-3 gap-2">
-                {cell.data.photos.map((u) => (
+                {viewPhotos.map((u) => (
                   <button key={u} type="button" onClick={() => setExpandedPhoto(u)} className="group relative">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={u} alt="Proof" className="aspect-square w-full rounded-lg border border-border object-cover" />
@@ -846,8 +913,8 @@ export function SummaryClient({
               </div>
             )}
 
-            {/* Review actions (admin only, submitted status, not a not_done task) */}
-            {isAdmin && cell.data.submissionId && cell.data.status === "submitted" && (
+            {/* Review actions (admin only, submission exists and not yet human-reviewed) */}
+            {isAdmin && activeSubId && viewHumanVerdict === null && cell.data.status !== "not_done" && (
               matrix?.payoutModel === "tiered" ? (
                 <>
                   {selectedTier && (

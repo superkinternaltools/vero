@@ -70,6 +70,21 @@ export async function submitProof(input: {
 
   const supabase = await createClient();
 
+  // Cycle window check: non-admins can only re-submit approved tasks within the original cycle.
+  if (!me.is_admin) {
+    const { data: taskRow } = await supabase
+      .from("tasks")
+      .select("status, cycle_start, cycle_end")
+      .eq("id", input.taskId)
+      .maybeSingle();
+    if (taskRow?.status === "approved") {
+      const today = new Date().toISOString().split("T")[0];
+      if (today < (taskRow.cycle_start ?? "") || today > (taskRow.cycle_end ?? "")) {
+        return { error: "The submission window for this cycle has closed. Re-submission is no longer allowed." };
+      }
+    }
+  }
+
   // Enforce submission window server-side.
   const { data: cam } = await supabase
     .from("campaigns")
