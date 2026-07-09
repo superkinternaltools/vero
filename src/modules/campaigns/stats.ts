@@ -118,6 +118,35 @@ function currentMonthWindow(): { monthStart: string; monthEnd: string } {
   };
 }
 
+export type WeekSel = "all" | "w1" | "w2" | "w3" | "w4";
+
+/**
+ * Builds the week + month date windows for a given year, 1-indexed month, and
+ * week selection. Week bands: W1=1-7, W2=8-14, W3=15-21, W4=22-last day.
+ * "all" makes the week window span the whole month.
+ */
+export function resolveWindow(
+  year: number,
+  month: number,
+  week: WeekSel,
+): { weekStart: string; weekEnd: string; monthStart: string; monthEnd: string } {
+  const mm = String(month).padStart(2, "0");
+  const last = new Date(year, month, 0).getDate();
+  const monthStart = `${year}-${mm}-01`;
+  const monthEnd = `${year}-${mm}-${String(last).padStart(2, "0")}`;
+
+  let weekStart = monthStart;
+  let weekEnd = monthEnd;
+  if (week !== "all") {
+    const wn = parseInt(week[1]);
+    const startDay = (wn - 1) * 7 + 1;
+    const endDay = wn === 4 ? last : wn * 7;
+    weekStart = `${year}-${mm}-${String(startDay).padStart(2, "0")}`;
+    weekEnd = `${year}-${mm}-${String(endDay).padStart(2, "0")}`;
+  }
+  return { weekStart, weekEnd, monthStart, monthEnd };
+}
+
 /** Fetches all rows from a paginated Supabase query, bypassing the default 1000-row cap. */
 async function fetchAllRows(
   buildQuery: (from: number, to: number) => PromiseLike<{ data: any[] | null; error: any }>,
