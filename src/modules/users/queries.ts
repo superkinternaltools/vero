@@ -15,6 +15,7 @@ export async function listUsers(): Promise<UserRow[]> {
       user_stores ( store_id )
       `,
     )
+    .is("deleted_at", null)
     .order("created_at", { ascending: true });
 
   return ((data as any[]) ?? []).map((row): UserRow => ({

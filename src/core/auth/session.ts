@@ -19,11 +19,12 @@ export async function getCurrentProfile(): Promise<Profile | null> {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("id, email, display_name, status, is_admin")
+    .select("id, email, display_name, status, is_admin, deleted_at")
     .eq("id", user.id)
     .maybeSingle();
 
-  return (profile as Profile) ?? null;
+  if (!profile || (profile as unknown as { deleted_at: string | null }).deleted_at) return null;
+  return profile as Profile;
 }
 
 /** Ensures the current user is an active admin, else redirects. Returns the profile. */

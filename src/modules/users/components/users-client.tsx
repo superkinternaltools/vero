@@ -12,6 +12,8 @@ import type { UserRow, UserStatus, ShellUser } from "../types";
 import {
   approveUser,
   updateUser,
+  deleteUser,
+  rejectPendingUser,
   inviteUser,
   createShellUser,
   updateShellUser,
@@ -126,10 +128,13 @@ export function UsersClient({
     });
   }
 
-  function toggleSelectAll() {
-    setSelectedIds((prev) =>
-      prev.size === users.length ? new Set() : new Set(users.map((u) => u.id)),
-    );
+  function toggleSelectAllIn(list: UserRow[]) {
+    const allSelected = list.length > 0 && list.every((u) => selectedIds.has(u.id));
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      list.forEach((u) => (allSelected ? next.delete(u.id) : next.add(u.id)));
+      return next;
+    });
   }
 
   function clearSelection() {
@@ -239,6 +244,46 @@ export function UsersClient({
     });
   }
 
+  function removeUser(u: UserRow) {
+    if (!window.confirm(`Remove ${u.display_name || u.email}? They'll lose access immediately.`))
+      return;
+    startTransition(async () => {
+      const res = await deleteUser(u.id);
+      if (res?.error) {
+        alert(res.error);
+        return;
+      }
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(u.id);
+        return next;
+      });
+      router.refresh();
+    });
+  }
+
+  function reject(u: UserRow) {
+    if (
+      !window.confirm(
+        `Reject the signup for ${u.email}? This permanently deletes their account and can't be undone.`,
+      )
+    )
+      return;
+    startTransition(async () => {
+      const res = await rejectPendingUser(u.id);
+      if (res?.error) {
+        alert(res.error);
+        return;
+      }
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(u.id);
+        return next;
+      });
+      router.refresh();
+    });
+  }
+
   // ── Handlers: invite ──────────────────────────────────────────────────
   function openInvite() {
     setInviteEmail("");
@@ -306,9 +351,10 @@ export function UsersClient({
     });
   }
 
-  function removeShell(id: string) {
+  function removeShell(s: ShellUser) {
+    if (!window.confirm(`Delete shell user "${s.display_name}"? This can't be undone.`)) return;
     startTransition(async () => {
-      await deleteShellUser(id);
+      await deleteShellUser(s.id);
       router.refresh();
     });
   }
@@ -355,6 +401,9 @@ export function UsersClient({
       .map((sid) => stores.find((s) => s.id === sid)?.label ?? sid)
       .filter(Boolean);
 
+  const pendingUsers = users.filter((u) => u.status === "pending");
+  const otherUsers = users.filter((u) => u.status !== "pending");
+
   return (
     <div className="space-y-8">
       {/* ── Header ── */}
@@ -362,7 +411,8 @@ export function UsersClient({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Users</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            {users.length} user{users.length === 1 ? "" : "s"} · {shellUsers.length} shell user
+            {otherUsers.length} user{otherUsers.length === 1 ? "" : "s"} ·{" "}
+            {pendingUsers.length} pending · {shellUsers.length} shell user
             {shellUsers.length === 1 ? "" : "s"}
           </p>
         </div>
@@ -432,7 +482,7 @@ export function UsersClient({
                         </button>
                         <button
                           type="button"
-                          onClick={() => removeShell(s.id)}
+                          onClick={() => removeShell(s)}
                           disabled={pending}
                           aria-label="Delete"
                           className="rounded-lg p-2 text-muted-foreground hover:bg-danger/10 hover:text-danger"
@@ -460,10 +510,99 @@ export function UsersClient({
         </button>
       )}
 
+      {/* ── Pending approvals table ── */}
+      {pendingUsers.length > 0 && (
+        <div>
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+            Pending approvals ({pendingUsers.length})
+          </h2>
+          <div className="overflow-x-auto rounded-2xl border border-border bg-card">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="w-10 px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={pendingUsers.length > 0 && pendingUsers.every((u) => selectedIds.has(u.id))}
+                      onChange={() => toggleSelectAllIn(pendingUsers)}
+                      className="h-4 w-4 cursor-pointer rounded accent-primary"
+                    />
+                  </th>
+                  <th className="px-4 py-3 font-semibold">Name</th>
+                  <th className="px-4 py-3 font-semibold">Email</th>
+                  <th className="px-4 py-3 font-semibold">Roles</th>
+                  <th className="px-4 py-3 font-semibold">Departments</th>
+                  <th className="px-4 py-3 text-right font-semibold">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pendingUsers.map((u) => (
+                  <tr key={u.id} className="border-b border-border align-top last:border-0">
+                    <td className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(u.id)}
+                        onChange={() => toggleSelect(u.id)}
+                        className="h-4 w-4 cursor-pointer rounded accent-primary"
+                      />
+                    </td>
+                    <td className="px-4 py-3 font-medium text-foreground">
+                      {u.display_name ?? "—"}
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground">{u.email}</td>
+                    <td className="px-4 py-3 text-muted-foreground">
+                      {u.roleNames.join(", ") || "—"}
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground">
+                      {u.departmentNames.join(", ") || "—"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-end gap-2">
+                        {shellUsers.length > 0 && (
+                          <Button
+                            variant="outline"
+                            size="md"
+                            onClick={() => openMap(u)}
+                            disabled={pending}
+                          >
+                            <Link2 className="h-3.5 w-3.5" />
+                            Map
+                          </Button>
+                        )}
+                        <Button size="md" onClick={() => approve(u)} disabled={pending}>
+                          Approve
+                        </Button>
+                        <button
+                          type="button"
+                          onClick={() => openEdit(u)}
+                          aria-label="Edit"
+                          className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => reject(u)}
+                          disabled={pending}
+                          aria-label="Reject"
+                          className="rounded-lg p-2 text-muted-foreground hover:bg-danger/10 hover:text-danger"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* ── Real users table ── */}
       <div>
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-          Users ({users.length})
+          Users ({otherUsers.length})
         </h2>
         <div className="overflow-x-auto rounded-2xl border border-border bg-card">
           <table className="w-full text-sm">
@@ -472,8 +611,8 @@ export function UsersClient({
                 <th className="w-10 px-4 py-3">
                   <input
                     type="checkbox"
-                    checked={users.length > 0 && selectedIds.size === users.length}
-                    onChange={toggleSelectAll}
+                    checked={otherUsers.length > 0 && otherUsers.every((u) => selectedIds.has(u.id))}
+                    onChange={() => toggleSelectAllIn(otherUsers)}
                     className="h-4 w-4 cursor-pointer rounded accent-primary"
                   />
                 </th>
@@ -486,7 +625,7 @@ export function UsersClient({
               </tr>
             </thead>
             <tbody>
-              {users.map((u) => (
+              {otherUsers.map((u) => (
                 <tr key={u.id} className="border-b border-border align-top last:border-0">
                   <td className="px-4 py-3">
                     <input
@@ -518,24 +657,6 @@ export function UsersClient({
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-2">
-                      {u.status === "pending" && (
-                        <>
-                          {shellUsers.length > 0 && (
-                            <Button
-                              variant="outline"
-                              size="md"
-                              onClick={() => openMap(u)}
-                              disabled={pending}
-                            >
-                              <Link2 className="h-3.5 w-3.5" />
-                              Map
-                            </Button>
-                          )}
-                          <Button size="md" onClick={() => approve(u)} disabled={pending}>
-                            Approve
-                          </Button>
-                        </>
-                      )}
                       <button
                         type="button"
                         onClick={() => openEdit(u)}
@@ -544,11 +665,20 @@ export function UsersClient({
                       >
                         <Pencil className="h-4 w-4" />
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => removeUser(u)}
+                        disabled={pending}
+                        aria-label="Delete"
+                        className="rounded-lg p-2 text-muted-foreground hover:bg-danger/10 hover:text-danger"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
                     </div>
                   </td>
                 </tr>
               ))}
-              {users.length === 0 && (
+              {otherUsers.length === 0 && (
                 <tr>
                   <td colSpan={7} className="p-10 text-center text-sm text-muted-foreground">
                     No users yet.

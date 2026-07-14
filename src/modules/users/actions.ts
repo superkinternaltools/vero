@@ -129,6 +129,50 @@ export async function updateUser(
   return {};
 }
 
+/** Soft-deletes an active/inactive user — hides them and blocks login, but
+ * keeps their row (and submission history) intact since submissions have no
+ * cascade rule back to profiles. */
+export async function deleteUser(id: string): Promise<Result> {
+  const me = await getCurrentProfile();
+  if (!me?.is_admin) return { error: "Not authorized." };
+  if (me.id === id) return { error: "You can't delete your own account." };
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("profiles")
+    .update({ deleted_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) return { error: error.message };
+
+  revalidatePath("/users");
+  return {};
+}
+
+/** Hard-deletes a pending signup that was never approved (rejects it). Safe
+ * because a pending user has no submissions or other data tied to them yet —
+ * this frees up their email for a future signup. */
+export async function rejectPendingUser(id: string): Promise<Result> {
+  const me = await getCurrentProfile();
+  if (!me?.is_admin) return { error: "Not authorized." };
+
+  const supabase = await createClient();
+  const { data: target } = await supabase
+    .from("profiles")
+    .select("status")
+    .eq("id", id)
+    .maybeSingle();
+  if (!target || target.status !== "pending") {
+    return { error: "Only pending signups can be rejected this way." };
+  }
+
+  const admin = createAdminClient();
+  const { error } = await admin.auth.admin.deleteUser(id);
+  if (error) return { error: error.message };
+
+  revalidatePath("/users");
+  return {};
+}
+
 export async function inviteUser(email: string, displayName: string): Promise<Result> {
   const me = await getCurrentProfile();
   if (!me?.is_admin) return { error: "Not authorized." };
