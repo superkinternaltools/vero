@@ -162,27 +162,39 @@ async function fetchAllRows(
   return results;
 }
 
-export async function getCampaignHealthRows(opts?: {
+export async function getCampaignHealthRows(opts: {
   weekStart: string;
   weekEnd: string;
   monthStart: string;
   monthEnd: string;
+  userId: string;
+  isAdmin: boolean;
 }): Promise<CampaignHealthRow[]> {
   const supabase = await createClient();
   const admin = createAdminClient();
   const t = await getThresholds();
-  const { weekStart, weekEnd } = opts
-    ? { weekStart: opts.weekStart, weekEnd: opts.weekEnd }
-    : currentWeekWindow();
-  const { monthStart, monthEnd } = opts
-    ? { monthStart: opts.monthStart, monthEnd: opts.monthEnd }
-    : currentMonthWindow();
+  const { weekStart, weekEnd, monthStart, monthEnd, userId, isAdmin } = opts;
+
+  // Non-admins only see campaigns that target BOTH one of their assigned
+  // stores AND one of their assigned departments. No assignment on either
+  // side means nothing can match, so skip the query entirely.
+  let allowedStoreIds: Set<string> | null = null;
+  let allowedDeptIds: Set<string> | null = null;
+  if (!isAdmin) {
+    const [{ data: us }, { data: ud }] = await Promise.all([
+      supabase.from("user_stores").select("store_id").eq("user_id", userId),
+      supabase.from("user_departments").select("department_id").eq("user_id", userId),
+    ]);
+    allowedStoreIds = new Set((us ?? []).map((r: any) => r.store_id));
+    allowedDeptIds = new Set((ud ?? []).map((r: any) => r.department_id));
+    if (allowedStoreIds.size === 0 || allowedDeptIds.size === 0) return [];
+  }
 
   const [{ data: campaigns }, tasks, subs] = await Promise.all([
     supabase
       .from("campaigns")
       .select(
-        "id, name, frequency, status, start_date, end_date, payout_enabled, payout_amount, execution_types ( name ), campaign_departments ( departments ( name ) ), campaign_stores ( store_id )",
+        "id, name, frequency, status, start_date, end_date, payout_enabled, payout_amount, execution_types ( name ), campaign_departments ( department_id, departments ( name ) ), campaign_stores ( store_id )",
       )
       .is("deleted_at", null)
       .order("created_at", { ascending: false }),
@@ -207,7 +219,14 @@ export async function getCampaignHealthRows(opts?: {
   const S = subs;
   const SUBMITTED = ["submitted", "approved", "rejected"];
 
-  return ((campaigns as any[]) ?? []).map((c) => {
+  const scopedCampaigns = ((campaigns as any[]) ?? []).filter((c) => {
+    if (!allowedStoreIds || !allowedDeptIds) return true; // admin — unrestricted
+    const storeMatch = (c.campaign_stores ?? []).some((s: any) => allowedStoreIds!.has(s.store_id));
+    const deptMatch = (c.campaign_departments ?? []).some((d: any) => allowedDeptIds!.has(d.department_id));
+    return storeMatch && deptMatch;
+  });
+
+  return scopedCampaigns.map((c) => {
     const ct = T.filter((x) => x.campaign_id === c.id);
     const cs = S.filter((x) => x.campaign_id === c.id);
 

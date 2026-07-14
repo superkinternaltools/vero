@@ -64,7 +64,9 @@ export default async function DashboardPage({
 
   const [kpis, healthRows] = await Promise.all([
     getKpis(),
-    showCampaigns ? getCampaignHealthRows(window) : Promise.resolve([]),
+    showCampaigns && profile
+      ? getCampaignHealthRows({ ...window, userId: profile.id, isAdmin: profile.is_admin })
+      : Promise.resolve([]),
   ]);
 
   const cards = [
