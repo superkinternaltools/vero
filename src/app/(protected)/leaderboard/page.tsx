@@ -25,11 +25,21 @@ export default async function LeaderboardPage({
   const dateTo = rawTo || defaultTo;
   const campaignIds = rawCampaigns ? rawCampaigns.split(",").filter(Boolean) : [];
 
-  const { jobTitles, campaigns } = await getLeaderboardFilters();
+  const { jobTitles, campaigns } = await getLeaderboardFilters({
+    userId: me.id,
+    isAdmin: !!me.is_admin,
+  });
 
   const [jtRows, storeRows] = await Promise.all([
     job_title
-      ? getJobTitleLeaderboard({ jobTitleId: job_title, campaignIds, dateFrom, dateTo })
+      ? getJobTitleLeaderboard({
+          jobTitleId: job_title,
+          campaignIds,
+          dateFrom,
+          dateTo,
+          userId: me.id,
+          isAdmin: !!me.is_admin,
+        })
       : Promise.resolve(null),
     me.is_admin
       ? getStoreLeaderboard({ campaignIds, dateFrom, dateTo })

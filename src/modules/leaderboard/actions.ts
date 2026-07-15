@@ -1,6 +1,8 @@
 "use server";
 
 import { createClient } from "@/core/db/server";
+import { getCurrentProfile } from "@/core/auth/session";
+import { getAllowedCampaignIdsForUser } from "./queries";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export type SubmissionDetail = {
@@ -31,7 +33,23 @@ export async function getUserTaskDetails(params: {
   dateFrom: string;
   dateTo: string;
 }): Promise<TaskDetail[]> {
+  const me = await getCurrentProfile();
+  if (!me) return [];
+
   const supabase = await createClient();
+
+  // Non-admins only see tasks from campaigns in their own department(s),
+  // regardless of what campaignIds the client passes.
+  let effectiveCampaignIds = params.campaignIds;
+  if (!me.is_admin) {
+    const allowed = await getAllowedCampaignIdsForUser(supabase, me.id);
+    if (allowed.length === 0) return [];
+    effectiveCampaignIds =
+      params.campaignIds.length > 0
+        ? params.campaignIds.filter((id) => allowed.includes(id))
+        : allowed;
+    if (effectiveCampaignIds.length === 0) return [];
+  }
 
   const { data: userStores } = await supabase
     .from("user_stores")
@@ -54,7 +72,8 @@ export async function getUserTaskDetails(params: {
     .lte("due_date", params.dateTo)
     .order("due_date", { ascending: true });
 
-  if (params.campaignIds.length > 0) q = q.in("campaign_id", params.campaignIds);
+  if (!me.is_admin) q = q.in("campaign_id", effectiveCampaignIds);
+  else if (params.campaignIds.length > 0) q = q.in("campaign_id", params.campaignIds);
 
   const { data: tasks } = await q;
 

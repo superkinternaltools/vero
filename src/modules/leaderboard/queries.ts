@@ -23,7 +23,31 @@ export type JobTitleRank = {
 
 const pct = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 100) : 0);
 
-export async function getLeaderboardFilters(): Promise<{
+/** Campaign IDs whose department targeting overlaps this user's assigned
+ * departments. Empty array means the user has no departments assigned, so
+ * nothing should be visible to them. */
+export async function getAllowedCampaignIdsForUser(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+): Promise<string[]> {
+  const { data: ud } = await supabase
+    .from("user_departments")
+    .select("department_id")
+    .eq("user_id", userId);
+  const deptIds = ((ud as any[]) ?? []).map((r) => r.department_id as string);
+  if (!deptIds.length) return [];
+
+  const { data: cd } = await supabase
+    .from("campaign_departments")
+    .select("campaign_id")
+    .in("department_id", deptIds);
+  return [...new Set(((cd as any[]) ?? []).map((r) => r.campaign_id as string))];
+}
+
+export async function getLeaderboardFilters(scope: {
+  userId: string;
+  isAdmin: boolean;
+}): Promise<{
   jobTitles: { id: string; name: string }[];
   campaigns: { id: string; name: string; status: string }[];
 }> {
@@ -32,9 +56,16 @@ export async function getLeaderboardFilters(): Promise<{
     supabase.from("job_titles").select("id, name").order("name"),
     supabase.from("campaigns").select("id, name, status").is("deleted_at", null).order("name"),
   ]);
+
+  let scopedCampaigns = (campaigns ?? []) as { id: string; name: string; status: string }[];
+  if (!scope.isAdmin) {
+    const allowed = new Set(await getAllowedCampaignIdsForUser(supabase, scope.userId));
+    scopedCampaigns = scopedCampaigns.filter((c) => allowed.has(c.id));
+  }
+
   return {
     jobTitles: (jobTitles ?? []) as { id: string; name: string }[],
-    campaigns: (campaigns ?? []) as { id: string; name: string; status: string }[],
+    campaigns: scopedCampaigns,
   };
 }
 
@@ -43,8 +74,22 @@ export async function getJobTitleLeaderboard(params: {
   campaignIds: string[];
   dateFrom: string;
   dateTo: string;
+  userId: string;
+  isAdmin: boolean;
 }): Promise<JobTitleRank[]> {
   const supabase = await createClient();
+
+  // Non-admins only see tasks from campaigns in their own department(s).
+  let effectiveCampaignIds = params.campaignIds;
+  if (!params.isAdmin) {
+    const allowed = await getAllowedCampaignIdsForUser(supabase, params.userId);
+    if (allowed.length === 0) return [];
+    effectiveCampaignIds =
+      params.campaignIds.length > 0
+        ? params.campaignIds.filter((id) => allowed.includes(id))
+        : allowed;
+    if (effectiveCampaignIds.length === 0) return [];
+  }
 
   // 1. Get all active users with this job title
   const { data: profiles } = await supabase
@@ -86,7 +131,8 @@ export async function getJobTitleLeaderboard(params: {
       .gte("due_date", params.dateFrom)
       .lte("due_date", params.dateTo)
       .in("store_id", allStoreIds);
-    if (params.campaignIds.length > 0) q = q.in("campaign_id", params.campaignIds);
+    if (!params.isAdmin) q = q.in("campaign_id", effectiveCampaignIds);
+    else if (params.campaignIds.length > 0) q = q.in("campaign_id", params.campaignIds);
     const { data: tasks } = await q;
 
     // 4. Attribute each task to all users linked to that store
