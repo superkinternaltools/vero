@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight, Download, X, ZoomIn, MapPin, Copy, Search, Flag } from "lucide-react";
 import { Button } from "@/core/ui/button";
+import { SelectSearch } from "@/core/ui/select-search";
 import { cn } from "@/core/lib/utils";
 import type { Matrix, CellData } from "../queries";
 import type { PayoutTier } from "@/modules/campaigns/types";
@@ -387,18 +388,16 @@ export function SummaryClient({
               <option key={s} value={s} className="capitalize">{s}</option>
             ))}
           </select>
-          <select
-            value={selectedId ?? ""}
-            onChange={(e) =>
-              router.push(e.target.value ? `/summary?campaign=${e.target.value}` : "/summary")
-            }
-            className="rounded-xl border border-transparent bg-input px-4 py-2.5 text-sm text-foreground focus:border-primary focus:bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
-          >
-            <option value="">Select a campaign…</option>
-            {visibleCampaigns.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
+          <div className="w-72">
+            <SelectSearch
+              value={selectedId ?? null}
+              onChange={(id) => router.push(id ? `/summary?campaign=${id}` : "/summary")}
+              options={visibleCampaigns.map((c) => ({ id: c.id, label: c.name }))}
+              placeholder="Select a campaign…"
+              searchPlaceholder="Search campaigns…"
+              emptyText="No campaigns available"
+            />
+          </div>
           {matrix && (
             <Button variant="outline" size="md" onClick={exportCsv}>
               <Download className="h-4 w-4" />

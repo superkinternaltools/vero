@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient } from "@/core/db/server";
+import { createAdminClient } from "@/core/db/admin";
 import { getCurrentProfile } from "@/core/auth/session";
 import { getAllowedCampaignIdsForUser } from "./queries";
 
@@ -59,7 +60,12 @@ export async function getUserTaskDetails(params: {
   const storeIds = (userStores as any[] ?? []).map((us) => us.store_id as string);
   if (!storeIds.length) return [];
 
-  let q = supabase
+  // tasks/submissions are RLS-restricted to admins or a field-user's own
+  // linked store — a viewer/reviewer drilling into another user's task
+  // history can't read these via the regular client. Access is already
+  // gated above by department scoping.
+  const admin = createAdminClient();
+  let q = admin
     .from("tasks")
     .select(`
       id, status, due_date, non_submission_reason,

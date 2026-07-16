@@ -1,4 +1,5 @@
 import { createClient } from "@/core/db/server";
+import { createAdminClient } from "@/core/db/admin";
 import type { PayoutTier } from "@/modules/campaigns/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -49,14 +50,70 @@ export type Matrix = {
   cells: Record<string, Record<string, CellData>>;
 };
 
-export async function listCampaignOptions(): Promise<{ id: string; name: string; status: string }[]> {
+/** Campaign IDs visible to this user: campaigns targeting BOTH one of their
+ * assigned stores AND one of their assigned departments (a campaign with no
+ * department tagged at all is treated as visible to everyone, since
+ * departments were never a required field on a campaign). No stores
+ * assigned means nothing can match, so an empty list is returned. */
+async function getAllowedCampaignIdsForUser(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+): Promise<string[]> {
+  const [{ data: us }, { data: ud }] = await Promise.all([
+    supabase.from("user_stores").select("store_id").eq("user_id", userId),
+    supabase.from("user_departments").select("department_id").eq("user_id", userId),
+  ]);
+  const storeIds = new Set(((us as any[]) ?? []).map((r) => r.store_id as string));
+  const deptIds = new Set(((ud as any[]) ?? []).map((r) => r.department_id as string));
+  if (storeIds.size === 0) return [];
+
+  const [{ data: campaigns }, { data: cs }, { data: cd }] = await Promise.all([
+    supabase.from("campaigns").select("id").is("deleted_at", null),
+    supabase.from("campaign_stores").select("campaign_id, store_id"),
+    supabase.from("campaign_departments").select("campaign_id, department_id"),
+  ]);
+
+  const campaignStores = new Map<string, string[]>();
+  for (const row of (cs as any[]) ?? []) {
+    const arr = campaignStores.get(row.campaign_id) ?? [];
+    arr.push(row.store_id);
+    campaignStores.set(row.campaign_id, arr);
+  }
+  const campaignDepts = new Map<string, string[]>();
+  for (const row of (cd as any[]) ?? []) {
+    const arr = campaignDepts.get(row.campaign_id) ?? [];
+    arr.push(row.department_id);
+    campaignDepts.set(row.campaign_id, arr);
+  }
+
+  return ((campaigns as any[]) ?? [])
+    .map((c) => c.id as string)
+    .filter((id) => {
+      const storeTags = campaignStores.get(id) ?? [];
+      const deptTags = campaignDepts.get(id) ?? [];
+      const storeMatch = storeTags.some((s) => storeIds.has(s));
+      const deptMatch = deptTags.length === 0 || deptTags.some((d) => deptIds.has(d));
+      return storeMatch && deptMatch;
+    });
+}
+
+export async function listCampaignOptions(scope: {
+  userId: string;
+  isAdmin: boolean;
+}): Promise<{ id: string; name: string; status: string }[]> {
   const supabase = await createClient();
   const { data } = await supabase
     .from("campaigns")
     .select("id, name, status")
     .is("deleted_at", null)
     .order("created_at", { ascending: false });
-  return (data as { id: string; name: string; status: string }[]) ?? [];
+
+  let list = (data as { id: string; name: string; status: string }[]) ?? [];
+  if (!scope.isAdmin) {
+    const allowed = new Set(await getAllowedCampaignIdsForUser(supabase, scope.userId));
+    list = list.filter((c) => allowed.has(c.id));
+  }
+  return list;
 }
 
 function rankSub(s: any, payoutTiers: PayoutTier[]): number {
@@ -72,8 +129,17 @@ function rankSub(s: any, payoutTiers: PayoutTier[]): number {
   return 0;
 }
 
-export async function getCampaignMatrix(id: string): Promise<Matrix | null> {
+export async function getCampaignMatrix(
+  id: string,
+  scope: { userId: string; isAdmin: boolean },
+): Promise<Matrix | null> {
   const supabase = await createClient();
+
+  if (!scope.isAdmin) {
+    const allowed = await getAllowedCampaignIdsForUser(supabase, scope.userId);
+    if (!allowed.includes(id)) return null;
+  }
+
   const { data: campaign } = await supabase
     .from("campaigns")
     .select("name, payout_model, payout_tiers, ai_review")
@@ -84,7 +150,12 @@ export async function getCampaignMatrix(id: string): Promise<Matrix | null> {
   const c = campaign as any;
   const payoutTiers: PayoutTier[] = c.payout_tiers ?? [];
 
-  const { data: tasks } = await supabase
+  // tasks/submissions are RLS-restricted to admins (or, for tasks, a
+  // field-user's own linked store) — a viewer/reviewer opening someone
+  // else's campaign matrix can't read either via the regular client.
+  // Access is already gated above by the store+department scoping check.
+  const admin = createAdminClient();
+  const { data: tasks } = await admin
     .from("tasks")
     .select(
       `

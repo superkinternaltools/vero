@@ -1,4 +1,5 @@
 import { createClient } from "@/core/db/server";
+import { createAdminClient } from "@/core/db/admin";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export type StoreRank = {
@@ -23,9 +24,11 @@ export type JobTitleRank = {
 
 const pct = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 100) : 0);
 
-/** Campaign IDs whose department targeting overlaps this user's assigned
- * departments. Empty array means the user has no departments assigned, so
- * nothing should be visible to them. */
+/** Campaign IDs visible to this user: campaigns tagged with one of their
+ * departments, plus any campaign with no department tagged at all (treated
+ * as visible to everyone, since departments were never a required field on
+ * a campaign). If the user has no departments assigned, only the untagged
+ * campaigns are returned. */
 export async function getAllowedCampaignIdsForUser(
   supabase: Awaited<ReturnType<typeof createClient>>,
   userId: string,
@@ -34,14 +37,26 @@ export async function getAllowedCampaignIdsForUser(
     .from("user_departments")
     .select("department_id")
     .eq("user_id", userId);
-  const deptIds = ((ud as any[]) ?? []).map((r) => r.department_id as string);
-  if (!deptIds.length) return [];
+  const deptIds = new Set(((ud as any[]) ?? []).map((r) => r.department_id as string));
 
-  const { data: cd } = await supabase
-    .from("campaign_departments")
-    .select("campaign_id")
-    .in("department_id", deptIds);
-  return [...new Set(((cd as any[]) ?? []).map((r) => r.campaign_id as string))];
+  const [{ data: campaigns }, { data: cd }] = await Promise.all([
+    supabase.from("campaigns").select("id").is("deleted_at", null),
+    supabase.from("campaign_departments").select("campaign_id, department_id"),
+  ]);
+
+  const campaignDepts = new Map<string, string[]>();
+  for (const row of (cd as any[]) ?? []) {
+    const arr = campaignDepts.get(row.campaign_id) ?? [];
+    arr.push(row.department_id);
+    campaignDepts.set(row.campaign_id, arr);
+  }
+
+  return ((campaigns as any[]) ?? [])
+    .map((c) => c.id as string)
+    .filter((id) => {
+      const tags = campaignDepts.get(id);
+      return !tags || tags.length === 0 || tags.some((d) => deptIds.has(d));
+    });
 }
 
 export async function getLeaderboardFilters(scope: {
@@ -78,6 +93,11 @@ export async function getJobTitleLeaderboard(params: {
   isAdmin: boolean;
 }): Promise<JobTitleRank[]> {
   const supabase = await createClient();
+  // profiles and tasks are RLS-restricted to admins (or, for tasks, a
+  // field-user's own linked store) — a viewer/reviewer ranking OTHER
+  // people's performance can't read either table via the regular client.
+  // Reads are gated by our own department scoping below instead.
+  const admin = createAdminClient();
 
   // Non-admins only see tasks from campaigns in their own department(s).
   let effectiveCampaignIds = params.campaignIds;
@@ -92,7 +112,7 @@ export async function getJobTitleLeaderboard(params: {
   }
 
   // 1. Get all active users with this job title
-  const { data: profiles } = await supabase
+  const { data: profiles } = await admin
     .from("profiles")
     .select("id, display_name")
     .eq("job_title_id", params.jobTitleId)
@@ -125,7 +145,7 @@ export async function getJobTitleLeaderboard(params: {
   const allStoreIds = [...storeToUsers.keys()];
   if (allStoreIds.length > 0) {
     // 3. Get tasks for those stores in range
-    let q = supabase
+    let q = admin
       .from("tasks")
       .select("store_id, status")
       .gte("due_date", params.dateFrom)

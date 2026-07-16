@@ -175,9 +175,10 @@ export async function getCampaignHealthRows(opts: {
   const t = await getThresholds();
   const { weekStart, weekEnd, monthStart, monthEnd, userId, isAdmin } = opts;
 
-  // Non-admins only see campaigns that target BOTH one of their assigned
-  // stores AND one of their assigned departments. No assignment on either
-  // side means nothing can match, so skip the query entirely.
+  // Non-admins only see campaigns that target one of their assigned stores.
+  // A campaign with no department tagged at all is treated as visible to
+  // everyone (departments were never a required field); a campaign that DOES
+  // have department tags still needs one of them to match the viewer's own.
   let allowedStoreIds: Set<string> | null = null;
   let allowedDeptIds: Set<string> | null = null;
   if (!isAdmin) {
@@ -187,7 +188,7 @@ export async function getCampaignHealthRows(opts: {
     ]);
     allowedStoreIds = new Set((us ?? []).map((r: any) => r.store_id));
     allowedDeptIds = new Set((ud ?? []).map((r: any) => r.department_id));
-    if (allowedStoreIds.size === 0 || allowedDeptIds.size === 0) return [];
+    if (allowedStoreIds.size === 0) return [];
   }
 
   const [{ data: campaigns }, tasks, subs] = await Promise.all([
@@ -222,7 +223,8 @@ export async function getCampaignHealthRows(opts: {
   const scopedCampaigns = ((campaigns as any[]) ?? []).filter((c) => {
     if (!allowedStoreIds || !allowedDeptIds) return true; // admin — unrestricted
     const storeMatch = (c.campaign_stores ?? []).some((s: any) => allowedStoreIds!.has(s.store_id));
-    const deptMatch = (c.campaign_departments ?? []).some((d: any) => allowedDeptIds!.has(d.department_id));
+    const deptTags = c.campaign_departments ?? [];
+    const deptMatch = deptTags.length === 0 || deptTags.some((d: any) => allowedDeptIds!.has(d.department_id));
     return storeMatch && deptMatch;
   });
 
