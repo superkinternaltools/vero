@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, ChevronRight, Plus, Trash2, Upload, Sliders, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Copy, Plus, Trash2, Upload, Sliders, X } from "lucide-react";
 import { Button } from "@/core/ui/button";
 import { Input } from "@/core/ui/input";
 import { Modal } from "@/core/ui/modal";
@@ -17,6 +17,7 @@ import {
   removeRosterMember,
   upsertAssignment,
   clearAssignment,
+  copyWeek,
   savePreset,
   deletePreset,
   validateBulk,
@@ -185,6 +186,17 @@ export function RostersClient({
       router.refresh();
     });
   }
+  function copyLastWeek() {
+    if (!grid) return;
+    const fromWeek = addDaysISO(grid.weekStart, -7);
+    if (!window.confirm(`Copy the week of ${fmtDay(fromWeek)} onto this week? This overwrites anything already set for this week.`)) return;
+    start(async () => {
+      const res = await copyWeek(grid.roster.id, fromWeek, grid.weekStart);
+      if (res.error) { window.alert(res.error); return; }
+      router.refresh();
+    });
+  }
+
   function clearCell() {
     if (!cell) return;
     start(async () => {
@@ -277,6 +289,9 @@ export function RostersClient({
               )}
             </div>
             <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="md" onClick={copyLastWeek} disabled={pending}>
+                <Copy className="h-4 w-4" /> Copy last week
+              </Button>
               <Button variant="outline" size="md" onClick={() => { setAddIds([]); setMembersOpen(true); }}>
                 <Plus className="h-4 w-4" /> Add people
               </Button>

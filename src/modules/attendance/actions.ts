@@ -191,6 +191,66 @@ export async function upsertAssignment(input: {
   return {};
 }
 
+/** Copies every assignment from one week onto another (7 days, same weekday
+ * offset). Overwrites whatever's already in the target week. Skips any
+ * resulting date outside the roster's own date range or on a holiday. */
+export async function copyWeek(
+  rosterId: string,
+  fromWeekStart: string,
+  toWeekStart: string,
+): Promise<Result & { copied?: number }> {
+  if (!(await requireAdmin())) return { error: "Not authorized." };
+  const supabase = await createClient();
+
+  const { data: roster } = await supabase
+    .from("attendance_rosters")
+    .select("start_date, end_date, holiday_dates")
+    .eq("id", rosterId)
+    .maybeSingle();
+  if (!roster) return { error: "Roster not found." };
+
+  const fromDays = Array.from({ length: 7 }, (_, i) => addDaysISO(fromWeekStart, i));
+  const { data: assigns } = await supabase
+    .from("attendance_assignments")
+    .select("user_id, work_date, preset_id, mode, windows, store_id")
+    .eq("roster_id", rosterId)
+    .in("work_date", fromDays);
+
+  if (!assigns || assigns.length === 0) return { copied: 0 };
+
+  const holidays = new Set((roster as any).holiday_dates ?? []);
+  const rows = (assigns as any[])
+    .map((a) => {
+      const offset = fromDays.indexOf(a.work_date);
+      return { ...a, work_date: addDaysISO(toWeekStart, offset) };
+    })
+    .filter(
+      (a) =>
+        a.work_date >= (roster as any).start_date &&
+        a.work_date <= (roster as any).end_date &&
+        !holidays.has(a.work_date),
+    );
+
+  if (rows.length === 0) return { copied: 0 };
+
+  const { error } = await supabase.from("attendance_assignments").upsert(
+    rows.map((a) => ({
+      roster_id: rosterId,
+      user_id: a.user_id,
+      work_date: a.work_date,
+      preset_id: a.preset_id,
+      mode: a.mode,
+      windows: a.windows,
+      store_id: a.store_id,
+    })),
+    { onConflict: "user_id,work_date" },
+  );
+  if (error) return { error: error.message };
+
+  revalidatePath("/attendance/rosters");
+  return { copied: rows.length };
+}
+
 export async function clearAssignment(userId: string, workDate: string): Promise<Result> {
   if (!(await requireAdmin())) return { error: "Not authorized." };
   const supabase = await createClient();
