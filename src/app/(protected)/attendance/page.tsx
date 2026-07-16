@@ -7,10 +7,10 @@ export default async function AttendancePage({
 }: {
   searchParams: Promise<{ date?: string }>;
 }) {
-  await requireAccess("attendance");
+  const access = await requireAccess("attendance");
   const { date } = await searchParams;
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
   const d = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : today;
-  const log = await getAttendanceLog(d);
+  const log = await getAttendanceLog(d, { userId: access.profile.id, isAdmin: access.isAdmin });
   return <AttendanceLogClient log={log} date={d} today={today} />;
 }

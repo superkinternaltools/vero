@@ -16,10 +16,10 @@ export default async function AttendanceAnalysisPage({
 }: {
   searchParams: Promise<{ week?: string }>;
 }) {
-  await requireAccess("attendance");
+  const access = await requireAccess("attendance");
   const { week } = await searchParams;
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
   const weekStart = mondayOf(week && /^\d{4}-\d{2}-\d{2}$/.test(week) ? week : today);
-  const { rows, days } = await getWeeklyAnalysis(weekStart);
+  const { rows, days } = await getWeeklyAnalysis(weekStart, { userId: access.profile.id, isAdmin: access.isAdmin });
   return <WeeklyAnalysisClient rows={rows} days={days} weekStart={weekStart} />;
 }

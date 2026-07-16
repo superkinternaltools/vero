@@ -403,14 +403,13 @@ export async function recordPunch(input: {
   assignmentId: string | null;
   rosterId: string | null;
   storeId: string | null;
-  photoUrl: string;
   photoPath: string;
   latitude: number | null;
   longitude: number | null;
 }): Promise<Result> {
   const me = await getCurrentProfile();
   if (!me) return { error: "Not signed in." };
-  if (!input.photoUrl) return { error: "A photo is required." };
+  if (!input.photoPath) return { error: "A photo is required." };
 
   const admin = createAdminClient();
 
@@ -438,7 +437,6 @@ export async function recordPunch(input: {
     roster_id: input.rosterId,
     work_date: input.workDate,
     kind: input.kind,
-    photo_url: input.photoUrl,
     photo_path: input.photoPath,
     store_id: input.storeId,
     latitude: input.latitude,
@@ -458,7 +456,6 @@ export async function recordPunch(input: {
   if (!ref) {
     await admin.from("attendance_references").insert({
       user_id: me.id,
-      photo_url: input.photoUrl,
       photo_path: input.photoPath,
     });
   }

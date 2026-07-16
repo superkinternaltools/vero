@@ -66,6 +66,69 @@ export async function userHasAssignments(userId: string): Promise<boolean> {
   return (count ?? 0) > 0;
 }
 
+// ── viewer scoping (store + department, same convention as Dashboard/Summary) ──
+type ViewerScope = { storeIds: Set<string>; deptIds: Set<string> };
+
+async function getViewerScope(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+): Promise<ViewerScope> {
+  const [{ data: us }, { data: ud }] = await Promise.all([
+    supabase.from("user_stores").select("store_id").eq("user_id", userId),
+    supabase.from("user_departments").select("department_id").eq("user_id", userId),
+  ]);
+  return {
+    storeIds: new Set(((us as any[]) ?? []).map((r) => r.store_id as string)),
+    deptIds: new Set(((ud as any[]) ?? []).map((r) => r.department_id as string)),
+  };
+}
+
+/** Departments for a set of users, as user_id -> Set(department_id). */
+async function getUserDeptMap(
+  admin: ReturnType<typeof createAdminClient>,
+  userIds: string[],
+): Promise<Map<string, Set<string>>> {
+  const map = new Map<string, Set<string>>();
+  if (!userIds.length) return map;
+  const { data } = await admin
+    .from("user_departments")
+    .select("user_id, department_id")
+    .in("user_id", userIds);
+  for (const row of (data as any[]) ?? []) {
+    const s = map.get(row.user_id) ?? new Set<string>();
+    s.add(row.department_id);
+    map.set(row.user_id, s);
+  }
+  return map;
+}
+
+/** A person with no department tagged at all is visible to everyone (same
+ * convention as untagged campaigns) — otherwise the viewer needs to share at
+ * least one department with them. */
+function deptMatches(personDepts: Set<string> | undefined, viewerDeptIds: Set<string>): boolean {
+  if (!personDepts || personDepts.size === 0) return true;
+  for (const d of personDepts) if (viewerDeptIds.has(d)) return true;
+  return false;
+}
+
+// ── photo access (private bucket — signed URLs, never a stored public URL) ──
+async function signPaths(
+  admin: ReturnType<typeof createAdminClient>,
+  paths: (string | null | undefined)[],
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const unique = [...new Set(paths.filter((p): p is string => !!p))];
+  if (!unique.length) return map;
+  const results = await Promise.all(
+    unique.map((p) => admin.storage.from("attendance").createSignedUrl(p, 3600)),
+  );
+  unique.forEach((p, i) => {
+    const url = results[i].data?.signedUrl;
+    if (url) map.set(p, url);
+  });
+  return map;
+}
+
 // ── presets ─────────────────────────────────────────────────────────────────
 export async function listPresets(): Promise<PresetRow[]> {
   const supabase = await createClient();
@@ -77,15 +140,48 @@ export async function listPresets(): Promise<PresetRow[]> {
   return ((data as any[]) ?? []).map(parsePreset);
 }
 
+/** Roster IDs visible to a non-admin: rosters with at least one assignment
+ * in one of the viewer's own stores, for a person who shares one of the
+ * viewer's departments (or has none tagged). */
+async function getAllowedRosterIds(
+  admin: ReturnType<typeof createAdminClient>,
+  viewerScope: ViewerScope,
+): Promise<Set<string>> {
+  if (viewerScope.storeIds.size === 0) return new Set();
+  const { data: assigns } = await admin
+    .from("attendance_assignments")
+    .select("roster_id, user_id")
+    .in("store_id", [...viewerScope.storeIds]);
+  const rows = (assigns as any[]) ?? [];
+  if (!rows.length) return new Set();
+  const userIds = [...new Set(rows.map((a) => a.user_id as string))];
+  const deptMap = await getUserDeptMap(admin, userIds);
+  return new Set(
+    rows
+      .filter((a) => deptMatches(deptMap.get(a.user_id), viewerScope.deptIds))
+      .map((a) => a.roster_id as string),
+  );
+}
+
 // ── rosters ─────────────────────────────────────────────────────────────────
-export async function listRosters(): Promise<RosterRow[]> {
+export async function listRosters(scope: { userId: string; isAdmin: boolean }): Promise<RosterRow[]> {
   const supabase = await createClient();
+
+  let allowedRosterIds: Set<string> | null = null;
+  if (!scope.isAdmin) {
+    const admin = createAdminClient();
+    const viewerScope = await getViewerScope(supabase, scope.userId);
+    allowedRosterIds = await getAllowedRosterIds(admin, viewerScope);
+    if (allowedRosterIds.size === 0) return [];
+  }
+
   const { data } = await supabase
     .from("attendance_rosters")
     .select("id, name, start_date, end_date, overtime_cap_hours, holiday_dates, attendance_roster_members ( user_id )")
     .is("deleted_at", null)
     .order("created_at", { ascending: false });
-  return ((data as any[]) ?? []).map((r) => ({
+
+  let list = ((data as any[]) ?? []).map((r) => ({
     id: r.id,
     name: r.name,
     startDate: r.start_date,
@@ -94,6 +190,8 @@ export async function listRosters(): Promise<RosterRow[]> {
     holidayDates: r.holiday_dates ?? [],
     memberCount: (r.attendance_roster_members ?? []).length,
   }));
+  if (allowedRosterIds) list = list.filter((r) => allowedRosterIds!.has(r.id));
+  return list;
 }
 
 async function listStoreOptions(admin: ReturnType<typeof createAdminClient>) {
@@ -113,8 +211,20 @@ export async function listAssignableUsers(): Promise<{ id: string; name: string 
   return ((data as any[]) ?? []).map((p) => ({ id: p.id, name: p.display_name || p.email }));
 }
 
-export async function getRosterGrid(rosterId: string, weekStart?: string): Promise<RosterGrid | null> {
+export async function getRosterGrid(
+  rosterId: string,
+  weekStart: string | undefined,
+  scope: { userId: string; isAdmin: boolean },
+): Promise<RosterGrid | null> {
   const admin = createAdminClient();
+
+  if (!scope.isAdmin) {
+    const supabase = await createClient();
+    const viewerScope = await getViewerScope(supabase, scope.userId);
+    const allowed = await getAllowedRosterIds(admin, viewerScope);
+    if (!allowed.has(rosterId)) return null;
+  }
+
   const { data: roster } = await admin
     .from("attendance_rosters")
     .select("id, name, start_date, end_date, overtime_cap_hours, holiday_dates")
@@ -251,8 +361,24 @@ function computeDay(
 }
 
 // ── attendance log (one day) ────────────────────────────────────────────────
-export async function getAttendanceLog(dateISO: string): Promise<AttendanceLog> {
+export async function getAttendanceLog(
+  dateISO: string,
+  scope: { userId: string; isAdmin: boolean },
+): Promise<AttendanceLog> {
   const admin = createAdminClient();
+  const emptyLog: AttendanceLog = {
+    date: dateISO,
+    rows: [],
+    summary: { expected: 0, present: 0, late: 0, absent: 0, flagged: 0 },
+  };
+
+  let viewerScope: ViewerScope | null = null;
+  if (!scope.isAdmin) {
+    const supabase = await createClient();
+    viewerScope = await getViewerScope(supabase, scope.userId);
+    if (viewerScope.storeIds.size === 0) return emptyLog;
+  }
+
   const [{ data: assigns }, { data: punches }] = await Promise.all([
     admin
       .from("attendance_assignments")
@@ -260,19 +386,27 @@ export async function getAttendanceLog(dateISO: string): Promise<AttendanceLog> 
       .eq("work_date", dateISO),
     admin
       .from("attendance_punches")
-      .select("id, user_id, kind, captured_at, photo_url, geofence_flag, geofence_distance_m, no_location_flag, reviewed_at")
+      .select("id, user_id, kind, captured_at, photo_path, geofence_flag, geofence_distance_m, no_location_flag, reviewed_at")
       .eq("work_date", dateISO)
       .order("captured_at"),
   ]);
 
-  const userIds = [...new Set(((assigns as any[]) ?? []).map((a) => a.user_id))];
-  const refMap = new Map<string, string>();
+  let scopedAssigns = (assigns as any[]) ?? [];
+  if (viewerScope) {
+    scopedAssigns = scopedAssigns.filter((a) => viewerScope!.storeIds.has(a.store_id));
+    const uids = [...new Set(scopedAssigns.map((a) => a.user_id as string))];
+    const deptMap = await getUserDeptMap(admin, uids);
+    scopedAssigns = scopedAssigns.filter((a) => deptMatches(deptMap.get(a.user_id), viewerScope!.deptIds));
+  }
+
+  const userIds = [...new Set(scopedAssigns.map((a) => a.user_id))];
+  const refPathMap = new Map<string, string>();
   if (userIds.length) {
     const { data: refs } = await admin
       .from("attendance_references")
-      .select("user_id, photo_url")
+      .select("user_id, photo_path")
       .in("user_id", userIds);
-    for (const r of (refs as any[]) ?? []) refMap.set(r.user_id, r.photo_url);
+    for (const r of (refs as any[]) ?? []) refPathMap.set(r.user_id, r.photo_path);
   }
 
   const punchesByUser = new Map<string, any[]>();
@@ -282,7 +416,12 @@ export async function getAttendanceLog(dateISO: string): Promise<AttendanceLog> 
     punchesByUser.set(p.user_id, arr);
   }
 
-  const rows: LogRow[] = ((assigns as any[]) ?? []).map((a) => {
+  const signedUrls = await signPaths(admin, [
+    ...refPathMap.values(),
+    ...((punches as any[]) ?? []).map((p) => p.photo_path),
+  ]);
+
+  const rows: LogRow[] = scopedAssigns.map((a) => {
     const mode: ShiftMode = a.mode === "open" ? "open" : "fixed";
     const windows = Array.isArray(a.windows) ? (a.windows as ShiftWindow[]) : [];
     const dayPunches = punchesByUser.get(a.user_id) ?? [];
@@ -305,12 +444,15 @@ export async function getAttendanceLog(dateISO: string): Promise<AttendanceLog> 
       overtimeMinutes: d.overtimeMinutes,
       status: d.status,
       flags,
-      referencePhoto: refMap.get(a.user_id) ?? null,
+      referencePhoto: (() => {
+        const p = refPathMap.get(a.user_id);
+        return p ? signedUrls.get(p) ?? null : null;
+      })(),
       punches: dayPunches.map((p) => ({
         id: p.id,
         kind: p.kind,
         capturedAt: p.captured_at,
-        photoUrl: p.photo_url,
+        photoUrl: signedUrls.get(p.photo_path) ?? null,
         geofenceFlag: p.geofence_flag,
         geofenceDistanceM: p.geofence_distance_m,
         noLocationFlag: p.no_location_flag,
@@ -335,14 +477,24 @@ export async function getAttendanceLog(dateISO: string): Promise<AttendanceLog> 
 }
 
 // ── weekly analysis ─────────────────────────────────────────────────────────
-export async function getWeeklyAnalysis(weekStart: string): Promise<{ rows: WeeklyRow[]; days: string[] }> {
+export async function getWeeklyAnalysis(
+  weekStart: string,
+  scope: { userId: string; isAdmin: boolean },
+): Promise<{ rows: WeeklyRow[]; days: string[] }> {
   const admin = createAdminClient();
   const days = Array.from({ length: 7 }, (_, i) => addDaysISO(weekStart, i));
+
+  let viewerScope: ViewerScope | null = null;
+  if (!scope.isAdmin) {
+    const supabase = await createClient();
+    viewerScope = await getViewerScope(supabase, scope.userId);
+    if (viewerScope.storeIds.size === 0) return { rows: [], days };
+  }
 
   const [{ data: assigns }, { data: punches }] = await Promise.all([
     admin
       .from("attendance_assignments")
-      .select("user_id, work_date, mode, windows, profiles ( display_name, email ), attendance_rosters ( overtime_cap_hours )")
+      .select("user_id, work_date, mode, windows, store_id, profiles ( display_name, email ), attendance_rosters ( overtime_cap_hours )")
       .gte("work_date", days[0])
       .lte("work_date", days[6]),
     admin
@@ -352,6 +504,14 @@ export async function getWeeklyAnalysis(weekStart: string): Promise<{ rows: Week
       .lte("work_date", days[6])
       .order("captured_at"),
   ]);
+
+  let scopedAssigns = (assigns as any[]) ?? [];
+  if (viewerScope) {
+    scopedAssigns = scopedAssigns.filter((a) => viewerScope!.storeIds.has(a.store_id));
+    const uids = [...new Set(scopedAssigns.map((a) => a.user_id as string))];
+    const deptMap = await getUserDeptMap(admin, uids);
+    scopedAssigns = scopedAssigns.filter((a) => deptMatches(deptMap.get(a.user_id), viewerScope!.deptIds));
+  }
 
   const punchKey = (uid: string, d: string) => `${uid}|${d}`;
   const punchMap = new Map<string, any[]>();
@@ -366,7 +526,7 @@ export async function getWeeklyAnalysis(weekStart: string): Promise<{ rows: Week
   const inMinsByUser = new Map<string, number[]>();
   const outMinsByUser = new Map<string, number[]>();
 
-  for (const a of (assigns as any[]) ?? []) {
+  for (const a of scopedAssigns) {
     const uid = a.user_id;
     if (!byUser.has(uid)) {
       byUser.set(uid, {
@@ -419,7 +579,21 @@ export async function getWeeklyAnalysis(weekStart: string): Promise<{ rows: Week
 // ── punch context (for the punch screen) ────────────────────────────────────
 export async function getPunchContext(userId: string, dateISO?: string): Promise<PunchContext> {
   const admin = createAdminClient();
-  const date = dateISO || todayIST();
+  const today = dateISO || todayIST();
+  const yesterday = addDaysISO(today, -1);
+
+  // Night shifts anchor to the day they started. If yesterday's assignment
+  // was checked in but never checked out, keep it as the active context —
+  // otherwise someone on a 22:00-06:00 shift would see "no shift today"
+  // after midnight and have no way to check out.
+  const { data: yPunches } = await admin
+    .from("attendance_punches")
+    .select("kind")
+    .eq("user_id", userId)
+    .eq("work_date", yesterday);
+  const yKinds = new Set(((yPunches as any[]) ?? []).map((p) => p.kind));
+  const carriedOver = yKinds.has("check_in") && !yKinds.has("check_out");
+  const date = carriedOver ? yesterday : today;
 
   const [{ data: assign }, { data: ref }, { data: punches }] = await Promise.all([
     admin
@@ -440,6 +614,7 @@ export async function getPunchContext(userId: string, dateISO?: string): Promise
   const a = assign as any;
   return {
     date,
+    carriedOver,
     hasReference: !!ref,
     assignment: a
       ? {

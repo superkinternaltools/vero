@@ -60,7 +60,7 @@ export type PunchDetail = {
   id: string;
   kind: string;
   capturedAt: string;
-  photoUrl: string;
+  photoUrl: string | null;
   geofenceFlag: boolean;
   geofenceDistanceM: number | null;
   noLocationFlag: boolean;
@@ -105,6 +105,9 @@ export type WeeklyRow = {
 
 export type PunchContext = {
   date: string;
+  /** True when this is actually yesterday's still-open shift (overnight
+   * shift crossing midnight), not today's own assignment. */
+  carriedOver: boolean;
   hasReference: boolean;
   assignment: {
     assignmentId: string;

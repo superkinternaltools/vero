@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, useTransition, type ChangeEvent } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Camera, MapPin, Check, Clock } from "lucide-react";
+import { Camera, MapPin, Check, Clock, X } from "lucide-react";
 import { createClient } from "@/core/db/client";
 import { cn } from "@/core/lib/utils";
 import { recordPunch } from "../actions";
@@ -10,31 +10,114 @@ import type { PunchContext } from "../types";
 
 type Kind = "check_in" | "check_out" | "mid";
 
-function CaptureButton({
-  kind,
-  label,
-  busy,
-  onFile,
+/** Live camera capture — no gallery/file picker. Requests the front camera,
+ * shows a preview, and hands back a JPEG blob on capture. This is the only
+ * way a punch photo gets taken; there is no <input type="file"> anywhere in
+ * this screen. */
+function CameraCapture({
+  onCapture,
+  onCancel,
 }: {
-  kind: Kind;
-  label: string;
-  busy: boolean;
-  onFile: (e: ChangeEvent<HTMLInputElement>, kind: Kind) => void;
+  onCapture: (blob: Blob) => void;
+  onCancel: () => void;
 }) {
-  const id = `cap-${kind}`;
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [ready, setReady] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function start() {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setErr("This browser can't access the camera. Try a recent Chrome or Safari.");
+        return;
+      }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user" },
+          audio: false,
+        });
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+        }
+        setReady(true);
+      } catch {
+        setErr("Camera access was blocked. Allow camera access for this site in your browser settings, then try again.");
+      }
+    }
+    start();
+    return () => {
+      cancelled = true;
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
+
+  function capture() {
+    const video = videoRef.current;
+    if (!video || !ready) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx2d = canvas.getContext("2d");
+    if (!ctx2d) return;
+    ctx2d.drawImage(video, 0, 0);
+    canvas.toBlob(
+      (blob) => {
+        if (blob) onCapture(blob);
+      },
+      "image/jpeg",
+      0.88,
+    );
+  }
+
+  function cancel() {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    onCancel();
+  }
+
   return (
-    <>
-      <label
-        htmlFor={id}
-        className={cn(
-          "rounded-lg bg-foreground px-3 py-1.5 text-xs font-medium text-background",
-          busy ? "pointer-events-none opacity-50" : "cursor-pointer",
-        )}
-      >
-        {label}
-      </label>
-      <input id={id} type="file" accept="image/*" capture="user" className="hidden" onChange={(e) => onFile(e, kind)} />
-    </>
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black">
+      {err ? (
+        <div className="mx-auto max-w-sm px-6 text-center">
+          <p className="text-sm text-white">{err}</p>
+          <button
+            onClick={cancel}
+            className="mt-4 rounded-lg bg-white px-4 py-2 text-sm font-medium text-black"
+          >
+            Close
+          </button>
+        </div>
+      ) : (
+        <>
+          <video ref={videoRef} playsInline muted className="max-h-full max-w-full" />
+          <div className="absolute bottom-8 flex items-center gap-6">
+            <button
+              onClick={cancel}
+              aria-label="Cancel"
+              className="flex h-12 w-12 items-center justify-center rounded-full bg-white/20 text-white"
+            >
+              <X className="h-5 w-5" />
+            </button>
+            <button
+              onClick={capture}
+              disabled={!ready}
+              aria-label="Take photo"
+              className="flex h-16 w-16 items-center justify-center rounded-full border-4 border-white bg-white/30 disabled:opacity-50"
+            >
+              <span className="h-12 w-12 rounded-full bg-white" />
+            </button>
+            <div className="w-12" />
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -44,6 +127,7 @@ export function PunchClient({ ctx }: { ctx: PunchContext }) {
   const [coords, setCoords] = useState<{ lat: number | null; lng: number | null }>({ lat: null, lng: null });
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [capturing, setCapturing] = useState<Kind | null>(null);
 
   const a = ctx.assignment;
 
@@ -63,22 +147,24 @@ export function PunchClient({ ctx }: { ctx: PunchContext }) {
     return p ? new Date(p.capturedAt).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" }) : null;
   };
 
-  async function onFile(e: ChangeEvent<HTMLInputElement>, kind: Kind) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file || !a) return;
+  async function onCapture(blob: Blob) {
+    const kind = capturing;
+    setCapturing(null);
+    if (!kind || !a) return;
     setUploading(true);
     setError(null);
     const supabase = createClient();
-    const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const path = `${ctx.date}/${crypto.randomUUID()}-${safe}`;
+    const path = `${ctx.date}/${crypto.randomUUID()}.jpg`;
+    const file = new File([blob], "capture.jpg", { type: "image/jpeg" });
     const { error: upErr } = await supabase.storage.from("attendance").upload(path, file);
     if (upErr) {
       setError(upErr.message);
       setUploading(false);
       return;
     }
-    const photoUrl = supabase.storage.from("attendance").getPublicUrl(path).data.publicUrl;
+    // The bucket is private — there's no public URL to compute here. The
+    // server generates short-lived signed URLs from the path when a photo
+    // actually needs to be displayed (e.g. the log drill-down).
     setUploading(false);
     start(async () => {
       const res = await recordPunch({
@@ -87,7 +173,6 @@ export function PunchClient({ ctx }: { ctx: PunchContext }) {
         assignmentId: a.assignmentId,
         rosterId: a.rosterId,
         storeId: a.storeId,
-        photoUrl,
         photoPath: path,
         latitude: coords.lat,
         longitude: coords.lng,
@@ -102,10 +187,30 @@ export function PunchClient({ ctx }: { ctx: PunchContext }) {
     weekday: "short", day: "numeric", month: "short",
   });
 
+  function CaptureButton({ kind, label }: { kind: Kind; label: string }) {
+    return (
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => setCapturing(kind)}
+        className={cn(
+          "rounded-lg bg-foreground px-3 py-1.5 text-xs font-medium text-background",
+          busy && "pointer-events-none opacity-50",
+        )}
+      >
+        {label}
+      </button>
+    );
+  }
+
   return (
     <div className="mx-auto max-w-md">
+      {capturing && <CameraCapture onCapture={onCapture} onCancel={() => setCapturing(null)} />}
+
       <h1 className="text-2xl font-semibold tracking-tight text-foreground">My attendance</h1>
-      <p className="mt-1 text-sm text-muted-foreground">{dateLabel}</p>
+      <p className="mt-1 text-sm text-muted-foreground">
+        {ctx.carriedOver ? `Night shift · started ${dateLabel}` : dateLabel}
+      </p>
 
       {!a ? (
         <div className="mt-8 rounded-2xl border border-dashed border-border bg-card py-14 text-center">
@@ -140,7 +245,7 @@ export function PunchClient({ ctx }: { ctx: PunchContext }) {
                       {done ? (
                         <span className="text-xs font-medium text-success">{punchTime(kind)}</span>
                       ) : (
-                        <CaptureButton kind={kind} label="Take photo" busy={busy} onFile={onFile} />
+                        <CaptureButton kind={kind} label="Take photo" />
                       )}
                     </div>
                   );
@@ -162,7 +267,7 @@ export function PunchClient({ ctx }: { ctx: PunchContext }) {
                       {done ? (
                         <span className="text-xs font-medium text-success">{punchTime(kind)}</span>
                       ) : (
-                        <CaptureButton kind={kind} label="Take photo" busy={busy} onFile={onFile} />
+                        <CaptureButton kind={kind} label="Take photo" />
                       )}
                     </div>
                   );
@@ -175,7 +280,7 @@ export function PunchClient({ ctx }: { ctx: PunchContext }) {
                 <div className="text-sm font-medium text-foreground">Mid-shift photo</div>
                 <div className="text-xs text-muted-foreground">Optional · add any time</div>
               </div>
-              <CaptureButton kind="mid" label="Add" busy={busy} onFile={onFile} />
+              <CaptureButton kind="mid" label="Add" />
             </div>
           </div>
 
@@ -194,8 +299,8 @@ export function PunchClient({ ctx }: { ctx: PunchContext }) {
 
           {error && <p className="mt-3 text-sm font-medium text-danger">{error}</p>}
           <p className="mt-3 text-xs text-muted-foreground">
-            Live camera only. Your first photo becomes your reference. Every photo is recorded — being
-            outside the store just adds a flag, it never blocks you.
+            Live camera only — no uploads from your gallery. Your first photo becomes your reference.
+            Every photo is recorded — being outside the store just adds a flag, it never blocks you.
           </p>
         </div>
       )}

@@ -12,14 +12,15 @@ export default async function RostersPage({
 }: {
   searchParams: Promise<{ roster?: string; week?: string }>;
 }) {
-  await requireAccess("attendance");
+  const access = await requireAccess("attendance");
+  const scope = { userId: access.profile.id, isAdmin: access.isAdmin };
   const { roster, week } = await searchParams;
   const [rosters, presets, users] = await Promise.all([
-    listRosters(),
+    listRosters(scope),
     listPresets(),
     listAssignableUsers(),
   ]);
-  const grid = roster ? await getRosterGrid(roster, week) : null;
+  const grid = roster ? await getRosterGrid(roster, week, scope) : null;
 
   return (
     <RostersClient

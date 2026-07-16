@@ -192,8 +192,12 @@ export function AttendanceLogClient({
               {detail.punches.map((p) => (
                 <div key={p.id} className="text-center">
                   <div className="h-28 w-28 overflow-hidden rounded-xl border border-border bg-muted">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={p.photoUrl} alt={p.kind} className="h-full w-full object-cover" />
+                    {p.photoUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={p.photoUrl} alt={p.kind} className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="flex h-full items-center justify-center text-xs text-muted-foreground">Unavailable</div>
+                    )}
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">
                     {p.kind.replace("_", " ")} ·{" "}
