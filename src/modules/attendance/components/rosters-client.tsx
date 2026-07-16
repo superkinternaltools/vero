@@ -24,6 +24,7 @@ import {
   type BulkRow,
   type BulkPreview,
 } from "../actions";
+import { AttendanceTabs } from "./attendance-tabs";
 
 const selectClass =
   "w-full rounded-xl border border-transparent bg-input px-3 py-2.5 text-sm text-foreground focus:border-primary focus:bg-card focus:outline-none";
@@ -226,6 +227,7 @@ export function RostersClient({
 
   return (
     <div>
+      <AttendanceTabs />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Attendance rosters</h1>

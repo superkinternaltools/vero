@@ -7,6 +7,7 @@ import { Button } from "@/core/ui/button";
 import { Modal } from "@/core/ui/modal";
 import { cn } from "@/core/lib/utils";
 import { markPunchReviewed, resetReference } from "../actions";
+import { AttendanceTabs } from "./attendance-tabs";
 import type { AttendanceLog, LogRow, DayStatus } from "../types";
 
 const STATUS: Record<DayStatus, { label: string; cls: string }> = {
@@ -73,6 +74,7 @@ export function AttendanceLogClient({
 
   return (
     <div>
+      <AttendanceTabs />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Attendance</h1>

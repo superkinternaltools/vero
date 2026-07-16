@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight, Download, Search } from "lucide-react";
 import { Button } from "@/core/ui/button";
 import { cn } from "@/core/lib/utils";
+import { AttendanceTabs } from "./attendance-tabs";
 import type { WeeklyRow } from "../types";
 
 function fmtMins(m: number): string {
@@ -52,6 +53,7 @@ export function WeeklyAnalysisClient({
 
   return (
     <div>
+      <AttendanceTabs />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Weekly analysis</h1>
