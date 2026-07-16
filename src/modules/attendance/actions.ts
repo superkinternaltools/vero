@@ -64,6 +64,10 @@ export async function deletePreset(id: string): Promise<Result> {
 }
 
 // ── rosters ─────────────────────────────────────────────────────────────────
+/** Creates the bare roster (name/dates/cap/holidays, optionally an initial
+ * member list). The calendar itself — who's on which store, which day — is
+ * built afterward on the roster's own page via applyWeek()/upsertAssignment(),
+ * the same actions used to edit an existing roster. */
 export async function createRoster(values: {
   name: string;
   startDate: string;
@@ -71,15 +75,7 @@ export async function createRoster(values: {
   overtimeCapHours: number | null;
   holidayDates: string[];
   memberIds: string[];
-  /** Optional default schedule — pre-fills the grid for every member on
-   * their own matching weekdays in the date range. Leave presetId null to
-   * create an empty grid (build it by hand or via bulk upload instead). */
-  defaultPresetId: string | null;
-  defaultStoreId: string | null;
-  /** userId -> working weekdays (0=Sun..6=Sat). Members not listed get no
-   * default days (empty grid for them, same as an all-off pattern). */
-  workingWeekdaysByUser: Record<string, number[]>;
-}): Promise<Result & { id?: string; created?: number }> {
+}): Promise<Result & { id?: string }> {
   const me = await requireAdmin();
   if (!me) return { error: "Not authorized." };
   if (!values.name.trim()) return { error: "Name is required." };
@@ -105,49 +101,8 @@ export async function createRoster(values: {
       .insert(values.memberIds.map((user_id) => ({ roster_id: id, user_id })));
   }
 
-  let created = 0;
-  if (values.defaultPresetId && values.defaultStoreId && values.memberIds.length) {
-    const admin = createAdminClient();
-    const { data: preset } = await admin
-      .from("attendance_shift_presets")
-      .select("mode, windows")
-      .eq("id", values.defaultPresetId)
-      .maybeSingle();
-    if (preset) {
-      const mode: ShiftMode = (preset as any).mode === "open" ? "open" : "fixed";
-      const windows = (preset as any).windows;
-      const holidaySet = new Set(values.holidayDates);
-      const userWdSets = new Map(
-        values.memberIds.map((uid) => [uid, new Set(values.workingWeekdaysByUser[uid] ?? [])]),
-      );
-      const assignments: any[] = [];
-      for (let d = values.startDate; d <= values.endDate; d = addDaysISO(d, 1)) {
-        if (holidaySet.has(d)) continue;
-        const dow = new Date(d + "T00:00:00Z").getUTCDay();
-        for (const userId of values.memberIds) {
-          if (!userWdSets.get(userId)!.has(dow)) continue;
-          assignments.push({
-            roster_id: id,
-            user_id: userId,
-            work_date: d,
-            preset_id: values.defaultPresetId,
-            mode,
-            windows,
-            store_id: values.defaultStoreId,
-          });
-        }
-      }
-      if (assignments.length) {
-        const { error: aErr } = await supabase
-          .from("attendance_assignments")
-          .upsert(assignments, { onConflict: "user_id,work_date,store_id" });
-        if (!aErr) created = assignments.length;
-      }
-    }
-  }
-
   revalidatePath("/attendance/rosters");
-  return { id, created };
+  return { id };
 }
 
 export async function updateRoster(
@@ -236,6 +191,44 @@ export async function upsertAssignment(input: {
     },
     { onConflict: "user_id,work_date,store_id" },
   );
+  if (error) return { error: error.message };
+  revalidatePath("/attendance/rosters");
+  return {};
+}
+
+/** Fills every day of one specific week with the same preset+store for one
+ * person. Scoped to a single week (not the whole roster) since the calendar
+ * page shows every week independently — pick a different preset/store for
+ * a different week by calling this again with that week's Monday. */
+export async function applyWeek(input: {
+  rosterId: string;
+  userId: string;
+  weekStart: string; // Monday
+  presetId: string;
+  storeId: string;
+}): Promise<Result> {
+  if (!(await requireAdmin())) return { error: "Not authorized." };
+  const supabase = await createClient();
+  const { data: preset } = await supabase
+    .from("attendance_shift_presets")
+    .select("mode, windows")
+    .eq("id", input.presetId)
+    .maybeSingle();
+  if (!preset) return { error: "Preset not found." };
+  const mode: ShiftMode = (preset as any).mode === "open" ? "open" : "fixed";
+  const windows = (preset as any).windows;
+  const rows = Array.from({ length: 7 }, (_, i) => ({
+    roster_id: input.rosterId,
+    user_id: input.userId,
+    work_date: addDaysISO(input.weekStart, i),
+    preset_id: input.presetId,
+    mode,
+    windows,
+    store_id: input.storeId,
+  }));
+  const { error } = await supabase
+    .from("attendance_assignments")
+    .upsert(rows, { onConflict: "user_id,work_date,store_id" });
   if (error) return { error: error.message };
   revalidatePath("/attendance/rosters");
   return {};

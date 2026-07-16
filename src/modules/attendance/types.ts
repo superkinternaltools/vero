@@ -40,8 +40,8 @@ export type GridCell = {
 
 export type RosterGrid = {
   roster: RosterRow;
-  weekStart: string;
-  days: string[];                                     // 7 ISO dates
+  monthKey: string;                                   // "YYYY-MM" currently shown
+  weekStarts: string[];                                // Monday of each week overlapping the month, ascending
   members: GridMember[];
   cells: Record<string, Record<string, GridCell[]>>;  // userId → date → shifts that day (0+, different stores)
   presets: PresetRow[];

@@ -1,23 +1,25 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, ChevronRight, Copy, Plus, Trash2, Upload, Sliders, X } from "lucide-react";
+import { ChevronDown, Plus, Trash2, Sliders, Upload, X } from "lucide-react";
 import { Button } from "@/core/ui/button";
 import { Input } from "@/core/ui/input";
 import { Modal } from "@/core/ui/modal";
 import { MultiSelect } from "@/core/ui/multi-select";
 import { SelectSearch } from "@/core/ui/select-search";
 import { cn } from "@/core/lib/utils";
-import type { RosterRow, PresetRow, RosterGrid, GridCell, ShiftMode, ShiftWindow } from "../types";
+import type { RosterRow, PresetRow, RosterGrid, ShiftMode, ShiftWindow } from "../types";
 import type { AssignableUser } from "../queries";
 import {
   createRoster,
+  updateRoster,
   deleteRoster,
   addRosterMembers,
   removeRosterMember,
   upsertAssignment,
   clearAssignment,
+  applyWeek,
   copyWeek,
   savePreset,
   deletePreset,
@@ -39,8 +41,11 @@ function addDaysISO(iso: string, days: number): string {
 function fmtDay(iso: string): string {
   return new Date(iso + "T00:00:00Z").toLocaleDateString("en-IN", { weekday: "short", day: "numeric" });
 }
+function fmtDayShort(iso: string): string {
+  return new Date(iso + "T00:00:00Z").toLocaleDateString("en-IN", { weekday: "short" });
+}
 
-/** Every calendar month the roster spans, for the month/year jump control. */
+/** Every calendar month the roster spans, for the month switcher. */
 function monthOptions(startDate: string, endDate: string): { value: string; label: string }[] {
   const opts: { value: string; label: string }[] = [];
   let d = new Date(startDate.slice(0, 7) + "-01T00:00:00Z");
@@ -58,8 +63,6 @@ function monthOptions(startDate: string, endDate: string): { value: string; labe
 }
 
 const CUSTOM = "__custom__";
-
-const WEEKDAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"]; // 0=Sun..6=Sat
 
 /** Filter a person picker by role / department / store instead of hunting
  * through names one at a time — narrow with the filters, then either pick
@@ -141,23 +144,188 @@ export function RostersClient({
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
+  const isNew = selectedRosterId === "new";
 
-  // New-roster modal
-  const [newOpen, setNewOpen] = useState(false);
+  // ── Creation form (a bare roster only — the calendar is built afterward
+  // on this same page, once a real roster id exists). ──────────────────────
   const [rName, setRName] = useState("");
   const [rStart, setRStart] = useState("");
   const [rEnd, setREnd] = useState("");
   const [rCap, setRCap] = useState("");
   const [rHolidayList, setRHolidayList] = useState<string[]>([]);
   const [rMembers, setRMembers] = useState<string[]>([]);
-  const [rWorkDays, setRWorkDays] = useState<boolean[]>([false, true, true, true, true, true, true]); // Mon-Sat default
-  const [rDefaultPresetId, setRDefaultPresetId] = useState("");
-  const [rDefaultStoreId, setRDefaultStoreId] = useState("");
-  // Per-person exceptions to the working-days default above (userId -> its own 7-day pattern).
-  const [rOverrides, setROverrides] = useState<Record<string, boolean[]>>({});
   const [err, setErr] = useState<string | null>(null);
 
-  // Presets modal
+  function submitNew() {
+    setErr(null);
+    start(async () => {
+      const res = await createRoster({
+        name: rName,
+        startDate: rStart,
+        endDate: rEnd,
+        overtimeCapHours: rCap.trim() ? Number(rCap) : null,
+        holidayDates: rHolidayList.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)),
+        memberIds: rMembers,
+      });
+      if (res.error) { setErr(res.error); return; }
+      router.push(`/attendance/rosters?roster=${res.id}`);
+    });
+  }
+
+  // ── Roster details (existing roster) — resyncs whenever a different
+  // roster is loaded. ───────────────────────────────────────────────────────
+  const [dName, setDName] = useState("");
+  const [dStart, setDStart] = useState("");
+  const [dEnd, setDEnd] = useState("");
+  const [dCap, setDCap] = useState("");
+  const [dHolidayList, setDHolidayList] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!grid) return;
+    setDName(grid.roster.name);
+    setDStart(grid.roster.startDate);
+    setDEnd(grid.roster.endDate);
+    setDCap(grid.roster.overtimeCapHours != null ? String(grid.roster.overtimeCapHours) : "");
+    setDHolidayList(grid.roster.holidayDates);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grid?.roster.id]);
+
+  function saveDetails() {
+    if (!grid) return;
+    start(async () => {
+      await updateRoster(grid.roster.id, {
+        name: dName,
+        startDate: dStart,
+        endDate: dEnd,
+        overtimeCapHours: dCap.trim() ? Number(dCap) : null,
+        holidayDates: dHolidayList.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)),
+      });
+      router.refresh();
+    });
+  }
+
+  // ── People (existing roster) ─────────────────────────────────────────────
+  const [addIds, setAddIds] = useState<string[]>([]);
+  const memberIds = new Set((grid?.members ?? []).map((m) => m.userId));
+  const addable = users.filter((u) => !memberIds.has(u.id));
+
+  function addSelectedMembers() {
+    if (!grid || !addIds.length) return;
+    start(async () => {
+      await addRosterMembers(grid.roster.id, addIds);
+      setAddIds([]);
+      router.refresh();
+    });
+  }
+  function removeMember(userId: string, name: string) {
+    if (!grid) return;
+    if (!window.confirm(`Remove ${name} from this roster?`)) return;
+    start(async () => {
+      await removeRosterMember(grid.roster.id, userId);
+      router.refresh();
+    });
+  }
+
+  // ── Calendar (existing roster) ───────────────────────────────────────────
+  const [expandedPersons, setExpandedPersons] = useState<Set<string>>(new Set());
+  function togglePerson(userId: string) {
+    setExpandedPersons((prev) => {
+      const next = new Set(prev);
+      next.has(userId) ? next.delete(userId) : next.add(userId);
+      return next;
+    });
+  }
+
+  function changeMonth(value: string) {
+    if (!grid) return;
+    router.push(`/attendance/rosters?roster=${grid.roster.id}&month=${value}`);
+  }
+
+  // Per-(person, week) "same all week" quick-set values.
+  const [weekPreset, setWeekPreset] = useState<Record<string, string>>({});
+  const [weekStore, setWeekStore] = useState<Record<string, string>>({});
+  function weekKey(userId: string, weekStart: string) {
+    return `${userId}|${weekStart}`;
+  }
+  function applyWeekFor(userId: string, weekStartDate: string) {
+    if (!grid) return;
+    const key = weekKey(userId, weekStartDate);
+    const presetId = weekPreset[key];
+    const storeId = weekStore[key];
+    if (!presetId || !storeId) return;
+    start(async () => {
+      await applyWeek({ rosterId: grid.roster.id, userId, weekStart: weekStartDate, presetId, storeId });
+      router.refresh();
+    });
+  }
+  function copyToNextWeek(weekStartDate: string) {
+    if (!grid) return;
+    const nextWeek = addDaysISO(weekStartDate, 7);
+    if (!window.confirm(`Copy the week of ${fmtDay(weekStartDate)} onto the week of ${fmtDay(nextWeek)}? This overwrites anything already set for that week.`)) return;
+    start(async () => {
+      const res = await copyWeek(grid.roster.id, weekStartDate, nextWeek);
+      if (res.error) { window.alert(res.error); return; }
+      router.refresh();
+    });
+  }
+
+  // Inline day editor — appears below whichever week contains the day being edited.
+  const [editingCell, setEditingCell] = useState<{ userId: string; date: string } | null>(null);
+  const [cePreset, setCePreset] = useState("");
+  const [ceStore, setCeStore] = useState("");
+  const [ceStart, setCeStart] = useState("09:00");
+  const [ceEnd, setCeEnd] = useState("18:00");
+
+  function openDayEditor(userId: string, date: string) {
+    const existing = grid?.cells[userId]?.[date] ?? [];
+    setEditingCell({ userId, date });
+    setCePreset("");
+    setCeStore(existing[0]?.storeId ?? grid?.stores[0]?.id ?? "");
+    setCeStart("09:00");
+    setCeEnd("18:00");
+  }
+  function editExistingShift(userId: string, date: string, presetId: string | null, storeId: string, mode: ShiftMode, windows: ShiftWindow[]) {
+    setEditingCell({ userId, date });
+    setCePreset(presetId ?? CUSTOM);
+    setCeStore(storeId);
+    if (mode === "fixed" && windows.length) {
+      setCeStart(windows[0].start);
+      setCeEnd(windows[windows.length - 1].end);
+    }
+  }
+  function saveDayEditor() {
+    if (!editingCell || !grid || !cePreset || !ceStore) return;
+    let mode: ShiftMode = "fixed";
+    let windows: ShiftWindow[] = [];
+    let presetId: string | null = null;
+    let punches = 2;
+    if (cePreset === CUSTOM) {
+      windows = [
+        { label: "Check-in", start: ceStart, end: ceStart, graceMin: 30 },
+        { label: "Check-out", start: ceEnd, end: ceEnd, graceMin: 0 },
+      ];
+    } else {
+      const p = presets.find((x) => x.id === cePreset);
+      if (!p) return;
+      mode = p.mode; windows = p.windows; presetId = p.id; punches = p.punches;
+    }
+    start(async () => {
+      await upsertAssignment({
+        rosterId: grid.roster.id, userId: editingCell.userId, workDate: editingCell.date,
+        presetId, mode, windows, punches, storeId: ceStore,
+      });
+      setEditingCell(null);
+      router.refresh();
+    });
+  }
+  function removeShift(assignmentId: string) {
+    start(async () => {
+      await clearAssignment(assignmentId);
+      router.refresh();
+    });
+  }
+
+  // ── Shift presets modal ───────────────────────────────────────────────────
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [pName, setPName] = useState("");
   const [pMode, setPMode] = useState<ShiftMode>("fixed");
@@ -169,56 +337,6 @@ export function RostersClient({
   const [pMid, setPMid] = useState("0");
   const [pEditId, setPEditId] = useState<string | null>(null);
 
-  // Add-members modal
-  const [membersOpen, setMembersOpen] = useState(false);
-  const [addIds, setAddIds] = useState<string[]>([]);
-
-  // Cell editor
-  const [cell, setCell] = useState<{ userId: string; name: string; date: string } | null>(null);
-  const [cPreset, setCPreset] = useState<string>("");
-  const [cStore, setCStore] = useState<string>("");
-  const [cStart, setCStart] = useState("09:00");
-  const [cEnd, setCEnd] = useState("18:00");
-  const [cApplyRow, setCApplyRow] = useState(false);
-
-  // Bulk modal
-  const [bulkOpen, setBulkOpen] = useState(false);
-  const [bulkText, setBulkText] = useState("");
-  const [preview, setPreview] = useState<BulkPreview[] | null>(null);
-  const [bulkRows, setBulkRows] = useState<BulkRow[]>([]);
-
-  function openNew() {
-    setRName(""); setRStart(""); setREnd(""); setRCap(""); setRHolidayList([]); setRMembers([]);
-    setRWorkDays([false, true, true, true, true, true, true]);
-    setRDefaultPresetId(""); setRDefaultStoreId(""); setROverrides({}); setErr(null);
-    setNewOpen(true);
-  }
-  function submitNew() {
-    setErr(null);
-    const toWeekdayIndices = (pattern: boolean[]) => pattern.flatMap((on, i) => (on ? [i] : []));
-    const workingWeekdaysByUser: Record<string, number[]> = {};
-    for (const uid of rMembers) {
-      workingWeekdaysByUser[uid] = toWeekdayIndices(rOverrides[uid] ?? rWorkDays);
-    }
-    start(async () => {
-      const res = await createRoster({
-        name: rName,
-        startDate: rStart,
-        endDate: rEnd,
-        overtimeCapHours: rCap.trim() ? Number(rCap) : null,
-        holidayDates: rHolidayList.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)),
-        memberIds: rMembers,
-        defaultPresetId: rDefaultPresetId || null,
-        defaultStoreId: rDefaultStoreId || null,
-        workingWeekdaysByUser,
-      });
-      if (res.error) { setErr(res.error); return; }
-      setNewOpen(false);
-      router.push(`/attendance/rosters?roster=${res.id}`);
-    });
-  }
-
-  // presets
   function resetPresetForm() {
     setPName(""); setPMode("fixed");
     setPWindows([
@@ -246,73 +364,12 @@ export function RostersClient({
     });
   }
 
-  // members
-  function openCell(userId: string, name: string, date: string) {
-    setCell({ userId, name, date });
-    setCPreset("");
-    setCStore(grid?.stores[0]?.id ?? "");
-    setCStart("09:00");
-    setCEnd("18:00");
-    setCApplyRow(false);
-  }
-  /** Loads an existing shift for that day back into the add/edit form —
-   * saving again with the same store updates it in place. */
-  function editCellShift(c: GridCell) {
-    setCPreset(c.presetId ?? CUSTOM);
-    setCStore(c.storeId);
-    if (c.mode === "fixed" && c.windows.length) {
-      setCStart(c.windows[0].start);
-      setCEnd(c.windows[c.windows.length - 1].end);
-    }
-  }
-  function saveCell() {
-    if (!cell || !grid || !cStore || !cPreset) return;
-    let mode: ShiftMode = "fixed";
-    let windows: ShiftWindow[] = [];
-    let presetId: string | null = null;
-    let punches = 2;
-    if (cPreset === CUSTOM) {
-      windows = [
-        { label: "Check-in", start: cStart, end: cStart, graceMin: 30 },
-        { label: "Check-out", start: cEnd, end: cEnd, graceMin: 0 },
-      ];
-    } else {
-      const p = presets.find((x) => x.id === cPreset);
-      if (!p) return;
-      mode = p.mode; windows = p.windows; presetId = p.id; punches = p.punches;
-    }
-    const dates = cApplyRow ? grid.days : [cell.date];
-    start(async () => {
-      for (const d of dates) {
-        await upsertAssignment({
-          rosterId: grid.roster.id, userId: cell.userId, workDate: d,
-          presetId, mode, windows, punches, storeId: cStore,
-        });
-      }
-      setCPreset("");
-      setCApplyRow(false);
-      router.refresh();
-    });
-  }
-  function removeCellShift(assignmentId: string) {
-    start(async () => {
-      await clearAssignment(assignmentId);
-      router.refresh();
-    });
-  }
-  function copyLastWeek() {
-    if (!grid) return;
-    const fromWeek = addDaysISO(grid.weekStart, -7);
-    if (!window.confirm(`Copy the week of ${fmtDay(fromWeek)} onto this week? This overwrites anything already set for this week.`)) return;
-    start(async () => {
-      const res = await copyWeek(grid.roster.id, fromWeek, grid.weekStart);
-      if (res.error) { window.alert(res.error); return; }
-      router.refresh();
-    });
-  }
+  // ── Bulk upload modal ─────────────────────────────────────────────────────
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkText, setBulkText] = useState("");
+  const [preview, setPreview] = useState<BulkPreview[] | null>(null);
+  const [bulkRows, setBulkRows] = useState<BulkRow[]>([]);
 
-
-  // bulk
   function runValidate() {
     if (!grid) return;
     const rows: BulkRow[] = bulkText
@@ -338,9 +395,6 @@ export function RostersClient({
       router.refresh();
     });
   }
-
-  const memberIds = new Set((grid?.members ?? []).map((m) => m.userId));
-  const addable = users.filter((u) => !memberIds.has(u.id));
   const allOk = preview != null && preview.every((p) => p.ok) && preview.length > 0;
 
   return (
@@ -355,9 +409,11 @@ export function RostersClient({
           <Button variant="outline" size="md" onClick={() => { resetPresetForm(); setPresetsOpen(true); }}>
             <Sliders className="h-4 w-4" /> Shift presets
           </Button>
-          <Button size="md" onClick={openNew}>
-            <Plus className="h-4 w-4" /> New roster
-          </Button>
+          {!isNew && (
+            <Button size="md" onClick={() => router.push("/attendance/rosters?roster=new")}>
+              <Plus className="h-4 w-4" /> New roster
+            </Button>
+          )}
         </div>
       </div>
 
@@ -377,126 +433,15 @@ export function RostersClient({
             {r.name} <span className="opacity-60">· {r.memberCount}</span>
           </button>
         ))}
-        {rosters.length === 0 && <p className="text-sm text-muted-foreground">No rosters yet — create your first.</p>}
+        {rosters.length === 0 && !isNew && <p className="text-sm text-muted-foreground">No rosters yet — create your first.</p>}
       </div>
 
-      {/* Grid */}
-      {grid && (
-        <div className="mt-6">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1 rounded-xl border border-border bg-input px-2 py-1.5">
-                <button onClick={() => router.push(`/attendance/rosters?roster=${grid.roster.id}&week=${addDaysISO(grid.weekStart, -7)}`)} className="rounded p-1 hover:bg-muted"><ChevronLeft className="h-4 w-4" /></button>
-                <span className="min-w-[110px] text-center text-sm font-medium">Week of {fmtDay(grid.weekStart)}</span>
-                <button onClick={() => router.push(`/attendance/rosters?roster=${grid.roster.id}&week=${addDaysISO(grid.weekStart, 7)}`)} className="rounded p-1 hover:bg-muted"><ChevronRight className="h-4 w-4" /></button>
-              </div>
-              <select
-                value={grid.weekStart.slice(0, 7)}
-                onChange={(e) => router.push(`/attendance/rosters?roster=${grid.roster.id}&week=${e.target.value}-01`)}
-                className="rounded-xl border border-transparent bg-input px-2.5 py-2 text-sm text-foreground focus:border-primary focus:bg-card focus:outline-none"
-              >
-                {monthOptions(grid.roster.startDate, grid.roster.endDate).map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
-              {grid.roster.overtimeCapHours != null && (
-                <span className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">OT cap {grid.roster.overtimeCapHours}h</span>
-              )}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button variant="outline" size="md" onClick={copyLastWeek} disabled={pending}>
-                <Copy className="h-4 w-4" /> Copy last week
-              </Button>
-              <Button variant="outline" size="md" onClick={() => { setAddIds([]); setMembersOpen(true); }}>
-                <Plus className="h-4 w-4" /> Add people
-              </Button>
-              <Button variant="outline" size="md" onClick={() => { setBulkText(""); setPreview(null); setBulkOpen(true); }}>
-                <Upload className="h-4 w-4" /> Bulk upload
-              </Button>
-              <Button variant="ghost" size="md" onClick={() => {
-                if (!window.confirm(`Delete roster "${grid.roster.name}"?`)) return;
-                start(async () => { await deleteRoster(grid.roster.id); router.push("/attendance/rosters"); });
-              }}>
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-
-          <div className="overflow-x-auto rounded-2xl border border-border bg-card p-2">
-            <table className="border-separate" style={{ borderSpacing: 4 }}>
-              <thead>
-                <tr>
-                  <th className="px-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Person</th>
-                  {grid.days.map((d) => (
-                    <th key={d} className="px-2 text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground">{fmtDay(d)}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {grid.members.map((m) => (
-                  <tr key={m.userId}>
-                    <td className="whitespace-nowrap pr-2 text-sm font-medium text-foreground">
-                      <span className="inline-flex items-center gap-1">
-                        {m.name}
-                        <button
-                          onClick={() => {
-                            if (!window.confirm(`Remove ${m.name} from this roster?`)) return;
-                            start(async () => { await removeRosterMember(grid.roster.id, m.userId); router.refresh(); });
-                          }}
-                          className="rounded p-0.5 text-muted-foreground hover:text-danger"
-                          aria-label="Remove"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </span>
-                    </td>
-                    {grid.days.map((d) => {
-                      const shifts = grid.cells[m.userId]?.[d] ?? [];
-                      return (
-                        <td key={d} className="align-top">
-                          <button
-                            onClick={() => openCell(m.userId, m.name, d)}
-                            className={cn(
-                              "h-full min-w-[92px] space-y-1 rounded-lg border p-1.5 text-left transition-colors",
-                              shifts.length ? "border-border bg-primary/5 hover:border-primary/50" : "border-dashed border-border text-muted-foreground hover:border-muted-foreground",
-                            )}
-                          >
-                            {shifts.length ? (
-                              shifts.map((c) => (
-                                <div key={c.assignmentId}>
-                                  <div className="text-xs font-semibold text-foreground">{c.label}</div>
-                                  <div className="text-[11px] text-muted-foreground">{c.storeName}</div>
-                                </div>
-                              ))
-                            ) : (
-                              <div className="text-xs">Off</div>
-                            )}
-                          </button>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-                {grid.members.length === 0 && (
-                  <tr><td colSpan={8} className="p-6 text-center text-sm text-muted-foreground">No people on this roster yet — add some.</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-          <p className="mt-2 text-xs text-muted-foreground">Click a cell to set a shift, pick a store, or mark off. Presets and bulk upload keep it fast.</p>
-        </div>
-      )}
-
-      {!grid && rosters.length > 0 && (
-        <p className="mt-8 text-center text-sm text-muted-foreground">Pick a roster above to edit its grid.</p>
-      )}
-
-      {/* New roster modal */}
-      <Modal open={newOpen} onClose={() => setNewOpen(false)} title="New roster">
-        <div className="space-y-4">
+      {/* Creation form */}
+      {isNew && (
+        <div className="mt-6 max-w-2xl space-y-4 rounded-2xl border border-border bg-card p-5">
           <div className="space-y-1.5">
-            <label className="text-sm font-medium text-foreground">Name</label>
-            <Input value={rName} onChange={(e) => setRName(e.target.value)} placeholder="e.g. Kondapur Qcomm — July" />
+            <label className="text-sm font-medium text-foreground">Roster name</label>
+            <Input value={rName} onChange={(e) => setRName(e.target.value)} placeholder="e.g. Kondapur Qcomm — Q3" />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5"><label className="text-sm font-medium text-foreground">Start date</label><Input type="date" value={rStart} onChange={(e) => setRStart(e.target.value)} /></div>
@@ -506,259 +451,217 @@ export function RostersClient({
             <label className="text-sm font-medium text-foreground">Overtime cap (hours)</label>
             <Input type="number" value={rCap} onChange={(e) => setRCap(e.target.value)} placeholder="blank = uncapped" />
           </div>
-
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-foreground">Holidays</label>
-            <div className="space-y-1.5">
-              {rHolidayList.map((d, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <Input
-                    type="date"
-                    value={d}
-                    onChange={(e) => setRHolidayList((list) => list.map((x, j) => (j === i ? e.target.value : x)))}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setRHolidayList((list) => list.filter((_, j) => j !== i))}
-                    className="rounded p-1.5 text-muted-foreground hover:text-danger"
-                    aria-label="Remove holiday"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-              ))}
-              <button
-                type="button"
-                onClick={() => setRHolidayList((list) => [...list, ""])}
-                className="text-sm font-medium text-primary hover:underline"
-              >
-                + add a holiday
-              </button>
-            </div>
+            {rHolidayList.map((d, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <Input type="date" value={d} onChange={(e) => setRHolidayList((list) => list.map((x, j) => (j === i ? e.target.value : x)))} />
+                <button type="button" onClick={() => setRHolidayList((list) => list.filter((_, j) => j !== i))} className="rounded p-1.5 text-muted-foreground hover:text-danger" aria-label="Remove holiday">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+            <button type="button" onClick={() => setRHolidayList((list) => [...list, ""])} className="text-sm font-medium text-primary hover:underline">
+              + add a holiday
+            </button>
           </div>
-
           <div className="space-y-1.5">
-            <label className="text-sm font-medium text-foreground">People</label>
-            <PeoplePicker
-              users={users}
-              roleOptions={roleOptions}
-              deptOptions={deptOptions}
-              storeOptions={stores}
-              selected={rMembers}
-              onChange={setRMembers}
-            />
+            <label className="text-sm font-medium text-foreground">People (optional — add more later)</label>
+            <PeoplePicker users={users} roleOptions={roleOptions} deptOptions={deptOptions} storeOptions={stores} selected={rMembers} onChange={setRMembers} />
+          </div>
+          {err && <p className="text-sm font-medium text-danger">{err}</p>}
+          <p className="text-xs text-muted-foreground">Who visits which store on which day gets set up on the next page, once the roster exists.</p>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="md" onClick={() => router.push("/attendance/rosters")}>Cancel</Button>
+            <Button size="md" onClick={submitNew} disabled={pending || !rName.trim() || !rStart || !rEnd}>{pending ? "Creating…" : "Create roster"}</Button>
+          </div>
+        </div>
+      )}
+
+      {/* Existing roster: details + people + calendar */}
+      {grid && (
+        <div className="mt-6 space-y-6">
+          <div className="space-y-4 rounded-2xl border border-border bg-card p-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-foreground">Roster details</h2>
+              <Button variant="ghost" size="md" onClick={() => {
+                if (!window.confirm(`Delete roster "${grid.roster.name}"?`)) return;
+                start(async () => { await deleteRoster(grid.roster.id); router.push("/attendance/rosters"); });
+              }}>
+                <Trash2 className="h-4 w-4" /> Delete roster
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <div className="space-y-1.5 md:col-span-2"><label className="text-sm font-medium text-foreground">Name</label><Input value={dName} onChange={(e) => setDName(e.target.value)} /></div>
+              <div className="space-y-1.5"><label className="text-sm font-medium text-foreground">Start date</label><Input type="date" value={dStart} onChange={(e) => setDStart(e.target.value)} /></div>
+              <div className="space-y-1.5"><label className="text-sm font-medium text-foreground">End date</label><Input type="date" value={dEnd} onChange={(e) => setDEnd(e.target.value)} /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><label className="text-sm font-medium text-foreground">Overtime cap (hours)</label><Input type="number" value={dCap} onChange={(e) => setDCap(e.target.value)} placeholder="blank = uncapped" /></div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">Holidays</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {dHolidayList.map((d, i) => (
+                    <span key={i} className="inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
+                      {d || "—"}
+                      <button onClick={() => setDHolidayList((list) => list.filter((_, j) => j !== i))} aria-label="Remove holiday"><X className="h-3 w-3" /></button>
+                    </span>
+                  ))}
+                  <button type="button" onClick={() => setDHolidayList((list) => [...list, ""])} className="text-xs font-medium text-primary hover:underline">+ add</button>
+                </div>
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <Button size="md" onClick={saveDetails} disabled={pending}>Save details</Button>
+            </div>
           </div>
 
-          <div className="rounded-xl border border-border p-4 space-y-3">
-            <div>
-              <p className="text-sm font-semibold text-foreground">Default schedule</p>
-              <p className="text-xs text-muted-foreground">
-                Pre-fills the grid for these people on their working days. Leave the shift blank to start
-                with an empty grid instead — you can always build it by hand or bulk upload afterward.
-              </p>
+          <div className="space-y-3 rounded-2xl border border-border bg-card p-5">
+            <h2 className="text-sm font-semibold text-foreground">People</h2>
+            <div className="flex items-end gap-2">
+              <div className="flex-1"><PeoplePicker users={addable} roleOptions={roleOptions} deptOptions={deptOptions} storeOptions={stores} selected={addIds} onChange={setAddIds} /></div>
+              <Button size="md" onClick={addSelectedMembers} disabled={pending || !addIds.length}>Add</Button>
             </div>
-
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-foreground">Working days</label>
-              <p className="text-xs text-muted-foreground">The default for everyone below — add exceptions per person underneath.</p>
-              <div className="flex gap-1.5">
-                {WEEKDAY_LABELS.map((lbl, i) => (
-                  <button
-                    key={i}
-                    type="button"
-                    onClick={() => setRWorkDays((wd) => wd.map((v, j) => (j === i ? !v : v)))}
-                    className={cn(
-                      "flex h-8 w-8 items-center justify-center rounded-full border text-xs font-semibold",
-                      rWorkDays[i] ? "border-primary bg-primary text-primary-foreground" : "border-border text-muted-foreground",
-                    )}
-                  >
-                    {lbl}
-                  </button>
+            {grid.members.length > 0 && (
+              <div className="divide-y divide-border rounded-xl border border-border">
+                {grid.members.map((m) => (
+                  <div key={m.userId} className="flex items-center justify-between px-3 py-2 text-sm">
+                    <span className="font-medium text-foreground">{m.name}</span>
+                    <button onClick={() => removeMember(m.userId, m.name)} className="rounded p-1 text-muted-foreground hover:text-danger" aria-label="Remove">
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
                 ))}
               </div>
+            )}
+          </div>
+
+          <div className="space-y-3 rounded-2xl border border-border bg-card p-5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-foreground">Calendar</h2>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={grid.monthKey}
+                  onChange={(e) => changeMonth(e.target.value)}
+                  className="rounded-xl border border-transparent bg-input px-3 py-2 text-sm text-foreground focus:border-primary focus:bg-card focus:outline-none"
+                >
+                  {monthOptions(grid.roster.startDate, grid.roster.endDate).map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+                {grid.roster.overtimeCapHours != null && (
+                  <span className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">OT cap {grid.roster.overtimeCapHours}h</span>
+                )}
+                <Button variant="outline" size="md" onClick={() => { setBulkText(""); setPreview(null); setBulkOpen(true); }}>
+                  <Upload className="h-4 w-4" /> Bulk upload
+                </Button>
+              </div>
             </div>
 
-            {rMembers.length > 0 && (
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">Different days for someone?</label>
-                <SelectSearch
-                  value={null}
-                  onChange={(uid) => {
-                    if (!uid) return;
-                    setROverrides((ov) => ({ ...ov, [uid]: ov[uid] ?? [...rWorkDays] }));
-                  }}
-                  options={rMembers
-                    .filter((uid) => !(uid in rOverrides))
-                    .map((uid) => ({ id: uid, label: users.find((u) => u.id === uid)?.name ?? uid }))}
-                  placeholder="Add an exception for…"
-                />
-                {Object.keys(rOverrides)
-                  .filter((uid) => rMembers.includes(uid))
-                  .map((uid) => (
-                    <div key={uid} className="flex items-center gap-2 rounded-lg border border-border px-3 py-2">
-                      <span className="w-28 flex-shrink-0 truncate text-sm text-foreground">
-                        {users.find((u) => u.id === uid)?.name ?? uid}
-                      </span>
-                      <div className="flex flex-1 gap-1">
-                        {WEEKDAY_LABELS.map((lbl, i) => (
-                          <button
-                            key={i}
-                            type="button"
-                            onClick={() =>
-                              setROverrides((ov) => ({
-                                ...ov,
-                                [uid]: ov[uid].map((v, j) => (j === i ? !v : v)),
-                              }))
-                            }
-                            className={cn(
-                              "flex h-7 w-7 items-center justify-center rounded-full border text-[11px] font-semibold",
-                              rOverrides[uid][i]
-                                ? "border-primary bg-primary text-primary-foreground"
-                                : "border-border text-muted-foreground",
-                            )}
-                          >
-                            {lbl}
-                          </button>
-                        ))}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setROverrides((ov) => {
-                            const next = { ...ov };
-                            delete next[uid];
-                            return next;
-                          })
-                        }
-                        className="rounded p-1 text-muted-foreground hover:text-danger"
-                        aria-label="Remove exception"
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
-                    </div>
-                  ))}
-              </div>
+            {grid.members.length === 0 && (
+              <p className="py-6 text-center text-sm text-muted-foreground">Add people above to start scheduling.</p>
             )}
 
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium text-foreground">Default shift</label>
-                <SelectSearch
-                  value={rDefaultPresetId || null}
-                  onChange={(v) => setRDefaultPresetId(v ?? "")}
-                  options={presets.map((p) => ({ id: p.id, label: `${p.name} (${p.mode})` }))}
-                  placeholder="None — leave empty"
-                  emptyText="No presets yet — add one in Shift presets."
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium text-foreground">Store</label>
-                <SelectSearch
-                  value={rDefaultStoreId || null}
-                  onChange={(v) => setRDefaultStoreId(v ?? "")}
-                  options={stores}
-                  placeholder="Pick a store…"
-                />
-              </div>
-            </div>
-          </div>
-
-          {err && <p className="text-sm font-medium text-danger">{err}</p>}
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" size="md" onClick={() => setNewOpen(false)}>Cancel</Button>
-            <Button size="md" onClick={submitNew} disabled={pending}>{pending ? "Creating…" : "Create"}</Button>
-          </div>
-        </div>
-      </Modal>
-
-      {/* Add members modal */}
-      <Modal open={membersOpen} onClose={() => setMembersOpen(false)} title="Add people to roster">
-        <div className="space-y-4">
-          <PeoplePicker
-            users={addable}
-            roleOptions={roleOptions}
-            deptOptions={deptOptions}
-            storeOptions={stores}
-            selected={addIds}
-            onChange={setAddIds}
-          />
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" size="md" onClick={() => setMembersOpen(false)}>Cancel</Button>
-            <Button size="md" disabled={pending || !addIds.length} onClick={() => {
-              start(async () => { await addRosterMembers(grid!.roster.id, addIds); setMembersOpen(false); router.refresh(); });
-            }}>Add</Button>
-          </div>
-        </div>
-      </Modal>
-
-      {/* Cell editor modal */}
-      <Modal open={!!cell} onClose={() => setCell(null)} title={cell ? `${cell.name} · ${fmtDay(cell.date)}` : ""}>
-        {cell && (
-          <div className="space-y-4">
-            {(() => {
-              const dayShifts = grid?.cells[cell.userId]?.[cell.date] ?? [];
-              if (dayShifts.length === 0) return null;
+            {grid.members.map((m) => {
+              const expanded = expandedPersons.has(m.userId);
               return (
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium text-foreground">
-                    {dayShifts.length > 1 ? "Shifts this day (multiple stores)" : "Shift this day"}
-                  </label>
-                  <div className="space-y-1.5">
-                    {dayShifts.map((c) => (
-                      <div key={c.assignmentId} className="flex items-center justify-between rounded-lg border border-border px-3 py-2 text-sm">
-                        <button type="button" onClick={() => editCellShift(c)} className="flex-1 text-left">
-                          <span className="font-medium text-foreground">{c.storeName}</span>
-                          <span className="ml-2 text-muted-foreground">{c.label}</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => removeCellShift(c.assignmentId)}
-                          disabled={pending}
-                          className="rounded p-1 text-muted-foreground hover:text-danger"
-                          aria-label="Remove shift"
-                        >
-                          <X className="h-4 w-4" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
+                <div key={m.userId} className="overflow-hidden rounded-xl border border-border">
+                  <button
+                    type="button"
+                    onClick={() => togglePerson(m.userId)}
+                    className={cn("flex w-full items-center justify-between px-4 py-3 text-left hover:bg-muted/40", expanded && "border-b border-border")}
+                  >
+                    <span className="text-sm font-medium text-foreground">{m.name}</span>
+                    <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", expanded && "rotate-180")} />
+                  </button>
+
+                  {expanded && (
+                    <div className="space-y-4 p-4">
+                      {grid.weekStarts.map((ws) => {
+                        const weekDates = Array.from({ length: 7 }, (_, i) => addDaysISO(ws, i));
+                        const key = weekKey(m.userId, ws);
+                        return (
+                          <div key={ws}>
+                            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Week of {fmtDay(ws)}</span>
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="text-xs text-muted-foreground">Same all week:</span>
+                                <div className="w-36"><SelectSearch value={weekPreset[key] ?? null} onChange={(v) => setWeekPreset((p) => ({ ...p, [key]: v ?? "" }))} options={presets.map((p) => ({ id: p.id, label: p.name }))} placeholder="Shift…" /></div>
+                                <div className="w-40"><SelectSearch value={weekStore[key] ?? null} onChange={(v) => setWeekStore((p) => ({ ...p, [key]: v ?? "" }))} options={grid.stores} placeholder="Store…" /></div>
+                                <Button size="md" variant="outline" onClick={() => applyWeekFor(m.userId, ws)} disabled={pending || !weekPreset[key] || !weekStore[key]}>Apply</Button>
+                                <Button size="md" variant="ghost" onClick={() => copyToNextWeek(ws)} disabled={pending}>Copy to next week</Button>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-7 gap-1.5">
+                              {weekDates.map((d) => {
+                                const shifts = grid.cells[m.userId]?.[d] ?? [];
+                                return (
+                                  <div key={d} className="min-h-[80px] rounded-lg border border-border bg-input p-1.5">
+                                    <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{fmtDayShort(d)}</div>
+                                    {shifts.map((s) => (
+                                      <div key={s.assignmentId} className="mb-1 rounded bg-primary/10 p-1">
+                                        <button type="button" onClick={() => editExistingShift(m.userId, d, s.presetId, s.storeId, s.mode, s.windows)} className="block w-full text-left">
+                                          <div className="text-[10.5px] font-semibold text-foreground">{s.label}</div>
+                                          <div className="text-[10px] text-muted-foreground">{s.storeName}</div>
+                                        </button>
+                                      </div>
+                                    ))}
+                                    <button
+                                      type="button"
+                                      onClick={() => openDayEditor(m.userId, d)}
+                                      className="w-full rounded border border-dashed border-border py-0.5 text-xs leading-none text-muted-foreground hover:border-muted-foreground"
+                                    >
+                                      +
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+
+                            {editingCell && editingCell.userId === m.userId && weekDates.includes(editingCell.date) && (
+                              <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-primary/40 bg-primary/5 p-2.5">
+                                <span className="text-xs font-medium text-foreground">{fmtDay(editingCell.date)}:</span>
+                                <div className="flex-1 min-w-[160px]">
+                                  <SelectSearch value={cePreset || null} onChange={(v) => setCePreset(v ?? "")} options={[...presets.map((p) => ({ id: p.id, label: `${p.name} (${p.mode})` })), { id: CUSTOM, label: "Custom time…" }]} placeholder="Pick a shift…" />
+                                </div>
+                                {cePreset === CUSTOM && (
+                                  <>
+                                    <Input type="time" value={ceStart} onChange={(e) => setCeStart(e.target.value)} style={{ width: 110 }} />
+                                    <Input type="time" value={ceEnd} onChange={(e) => setCeEnd(e.target.value)} style={{ width: 110 }} />
+                                  </>
+                                )}
+                                <div className="flex-1 min-w-[160px]">
+                                  <SelectSearch value={ceStore || null} onChange={(v) => setCeStore(v ?? "")} options={grid.stores} placeholder="Pick a store…" />
+                                </div>
+                                {(() => {
+                                  const existing = grid.cells[editingCell.userId]?.[editingCell.date] ?? [];
+                                  const match = existing.find((s) => s.storeId === ceStore);
+                                  return match ? (
+                                    <Button size="md" variant="ghost" onClick={() => { removeShift(match.assignmentId); setEditingCell(null); }} disabled={pending}>Remove</Button>
+                                  ) : null;
+                                })()}
+                                <Button size="md" variant="outline" onClick={() => setEditingCell(null)}>Cancel</Button>
+                                <Button size="md" onClick={saveDayEditor} disabled={pending || !cePreset || !ceStore}>Save</Button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               );
-            })()}
-
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-foreground">Add a shift for this day</label>
-              <p className="text-xs text-muted-foreground">Pick a different store from an existing shift above to add another visit the same day; pick the same store to edit it.</p>
-              <SelectSearch
-                value={cPreset || null}
-                onChange={(v) => setCPreset(v ?? "")}
-                options={[...presets.map((p) => ({ id: p.id, label: `${p.name} (${p.mode})` })), { id: CUSTOM, label: "Custom time…" }]}
-                placeholder="Pick a shift…"
-              />
-            </div>
-            {cPreset === CUSTOM && (
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5"><label className="text-sm font-medium text-foreground">Start</label><Input type="time" value={cStart} onChange={(e) => setCStart(e.target.value)} /></div>
-                <div className="space-y-1.5"><label className="text-sm font-medium text-foreground">End</label><Input type="time" value={cEnd} onChange={(e) => setCEnd(e.target.value)} /></div>
-              </div>
-            )}
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-foreground">Store</label>
-              <SelectSearch value={cStore || null} onChange={(v) => setCStore(v ?? "")} options={grid?.stores ?? []} placeholder="Pick a store…" />
-            </div>
-            <label className="flex items-center gap-2 text-sm text-foreground">
-              <input type="checkbox" checked={cApplyRow} onChange={(e) => setCApplyRow(e.target.checked)} className="h-4 w-4 rounded accent-primary" />
-              Apply this shift to this person&apos;s whole week
-            </label>
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" size="md" onClick={() => setCell(null)}>Close</Button>
-              <Button size="md" onClick={saveCell} disabled={pending || !cPreset || !cStore}>Save shift</Button>
-            </div>
+            })}
           </div>
-        )}
-      </Modal>
+        </div>
+      )}
 
-      {/* Presets modal */}
+      {!grid && !isNew && rosters.length > 0 && (
+        <p className="mt-8 text-center text-sm text-muted-foreground">Pick a roster above to view or edit it.</p>
+      )}
+
+      {/* Shift presets modal */}
       <Modal open={presetsOpen} onClose={() => setPresetsOpen(false)} title="Shift presets">
         <div className="space-y-5">
           {presets.length > 0 && (

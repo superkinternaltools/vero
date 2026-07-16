@@ -272,9 +272,32 @@ export async function listRoleAndDeptOptions(): Promise<{
   };
 }
 
+/** Monday on/before the given date. */
+function mondayOnOrBefore(iso: string): string {
+  const d = new Date(iso + "T00:00:00Z");
+  const dow = d.getUTCDay(); // 0=Sun..6=Sat
+  const diff = dow === 0 ? -6 : 1 - dow;
+  d.setUTCDate(d.getUTCDate() + diff);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Every Monday-starting week that overlaps the given calendar month. */
+function weekStartsForMonth(monthKey: string): string[] {
+  const [y, m] = monthKey.split("-").map(Number);
+  const firstOfMonth = `${monthKey}-01`;
+  const lastOfMonth = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+  const starts: string[] = [];
+  let w = mondayOnOrBefore(firstOfMonth);
+  while (w <= lastOfMonth) {
+    starts.push(w);
+    w = addDaysISO(w, 7);
+  }
+  return starts;
+}
+
 export async function getRosterGrid(
   rosterId: string,
-  weekStart: string | undefined,
+  monthKey: string | undefined,
   scope: { userId: string; isAdmin: boolean },
 ): Promise<RosterGrid | null> {
   const admin = createAdminClient();
@@ -295,8 +318,10 @@ export async function getRosterGrid(
   if (!roster) return null;
   const r = roster as any;
 
-  const ws = weekStart || r.start_date;
-  const days = Array.from({ length: 7 }, (_, i) => addDaysISO(ws, i));
+  const mk = monthKey || r.start_date.slice(0, 7);
+  const weekStarts = weekStartsForMonth(mk);
+  const rangeStart = weekStarts[0];
+  const rangeEnd = addDaysISO(weekStarts[weekStarts.length - 1], 6);
 
   const [{ data: members }, { data: assigns }, presets, stores] = await Promise.all([
     admin.from("attendance_roster_members").select("user_id, profiles ( display_name, email )").eq("roster_id", rosterId),
@@ -304,8 +329,8 @@ export async function getRosterGrid(
       .from("attendance_assignments")
       .select("id, user_id, work_date, preset_id, mode, windows, store_id, stores ( code, name ), attendance_shift_presets ( name )")
       .eq("roster_id", rosterId)
-      .gte("work_date", days[0])
-      .lte("work_date", days[6])
+      .gte("work_date", rangeStart)
+      .lte("work_date", rangeEnd)
       .order("created_at"),
     listPresets(),
     listStoreOptions(admin),
@@ -348,8 +373,8 @@ export async function getRosterGrid(
       holidayDates: r.holiday_dates ?? [],
       memberCount: memberRows.length,
     },
-    weekStart: ws,
-    days,
+    monthKey: mk,
+    weekStarts,
     members: memberRows,
     cells,
     presets,
