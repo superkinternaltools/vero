@@ -13,6 +13,7 @@ import type {
   DayStatus,
   WeeklyRow,
   PunchContext,
+  PunchAssignment,
 } from "./types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -301,10 +302,11 @@ export async function getRosterGrid(
     admin.from("attendance_roster_members").select("user_id, profiles ( display_name, email )").eq("roster_id", rosterId),
     admin
       .from("attendance_assignments")
-      .select("user_id, work_date, preset_id, mode, windows, store_id, stores ( code, name ), attendance_shift_presets ( name )")
+      .select("id, user_id, work_date, preset_id, mode, windows, store_id, stores ( code, name ), attendance_shift_presets ( name )")
       .eq("roster_id", rosterId)
       .gte("work_date", days[0])
-      .lte("work_date", days[6]),
+      .lte("work_date", days[6])
+      .order("created_at"),
     listPresets(),
     listStoreOptions(admin),
   ]);
@@ -313,7 +315,9 @@ export async function getRosterGrid(
     .map((m) => ({ userId: m.user_id, name: m.profiles?.display_name || m.profiles?.email || "—" }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  const cells: Record<string, Record<string, GridCell>> = {};
+  // A day can hold more than one shift (different stores), so each cell is
+  // a list rather than a single value.
+  const cells: Record<string, Record<string, GridCell[]>> = {};
   for (const a of (assigns as any[]) ?? []) {
     const mode: ShiftMode = a.mode === "open" ? "open" : "fixed";
     const wins = Array.isArray(a.windows) ? (a.windows as ShiftWindow[]) : [];
@@ -321,14 +325,17 @@ export async function getRosterGrid(
       a.attendance_shift_presets?.name ??
       (mode === "open" ? "Open" : wins[0] ? `${wins[0].start}–${wins[wins.length - 1].end}` : "Custom");
     cells[a.user_id] = cells[a.user_id] ?? {};
-    cells[a.user_id][a.work_date] = {
+    const list = cells[a.user_id][a.work_date] ?? [];
+    list.push({
+      assignmentId: a.id,
       presetId: a.preset_id ?? null,
       label,
       mode,
       windows: wins,
       storeId: a.store_id,
       storeName: a.stores ? `${a.stores.code}` : "—",
-    };
+    });
+    cells[a.user_id][a.work_date] = list;
   }
 
   return {
@@ -446,7 +453,7 @@ export async function getAttendanceLog(
       .eq("work_date", dateISO),
     admin
       .from("attendance_punches")
-      .select("id, user_id, kind, captured_at, photo_path, geofence_flag, geofence_distance_m, no_location_flag, reviewed_at")
+      .select("id, user_id, assignment_id, kind, captured_at, photo_path, geofence_flag, geofence_distance_m, no_location_flag, reviewed_at")
       .eq("work_date", dateISO)
       .order("captured_at"),
   ]);
@@ -469,11 +476,14 @@ export async function getAttendanceLog(
     for (const r of (refs as any[]) ?? []) refPathMap.set(r.user_id, r.photo_path);
   }
 
-  const punchesByUser = new Map<string, any[]>();
+  // Keyed by assignment, not user — a person can have more than one store
+  // visit (assignment) the same day, each with its own punches.
+  const punchesByAssignment = new Map<string, any[]>();
   for (const p of (punches as any[]) ?? []) {
-    const arr = punchesByUser.get(p.user_id) ?? [];
+    if (!p.assignment_id) continue;
+    const arr = punchesByAssignment.get(p.assignment_id) ?? [];
     arr.push(p);
-    punchesByUser.set(p.user_id, arr);
+    punchesByAssignment.set(p.assignment_id, arr);
   }
 
   const signedUrls = await signPaths(admin, [
@@ -489,7 +499,7 @@ export async function getAttendanceLog(
   const rows: LogRow[] = scopedAssigns.map((a) => {
     const mode: ShiftMode = a.mode === "open" ? "open" : "fixed";
     const windows = Array.isArray(a.windows) ? (a.windows as ShiftWindow[]) : [];
-    const dayPunches = punchesByUser.get(a.user_id) ?? [];
+    const dayPunches = punchesByAssignment.get(a.id) ?? [];
     const cap = a.attendance_rosters?.overtime_cap_hours ?? null;
     const d = computeDay(mode, windows, dayPunches, a.work_date, cap);
     const flags: string[] = [];
@@ -498,6 +508,7 @@ export async function getAttendanceLog(
     const shiftLabel =
       mode === "open" ? "Open" : windows[0] ? `${windows[0].start}–${windows[windows.length - 1].end}` : "—";
     return {
+      assignmentId: a.id,
       userId: a.user_id,
       name: a.profiles?.display_name || a.profiles?.email || "—",
       storeId: a.store_id,
@@ -529,7 +540,7 @@ export async function getAttendanceLog(
     };
   });
 
-  rows.sort((a, b) => a.name.localeCompare(b.name));
+  rows.sort((a, b) => a.name.localeCompare(b.name) || a.storeName.localeCompare(b.storeName));
 
   return {
     date: dateISO,
@@ -562,12 +573,12 @@ export async function getWeeklyAnalysis(
   const [{ data: assigns }, { data: punches }] = await Promise.all([
     admin
       .from("attendance_assignments")
-      .select("user_id, work_date, mode, windows, store_id, profiles ( display_name, email ), attendance_rosters ( overtime_cap_hours )")
+      .select("id, user_id, work_date, mode, windows, store_id, profiles ( display_name, email ), attendance_rosters ( overtime_cap_hours )")
       .gte("work_date", days[0])
       .lte("work_date", days[6]),
     admin
       .from("attendance_punches")
-      .select("user_id, work_date, kind, captured_at")
+      .select("assignment_id, kind, captured_at")
       .gte("work_date", days[0])
       .lte("work_date", days[6])
       .order("captured_at"),
@@ -581,13 +592,14 @@ export async function getWeeklyAnalysis(
     scopedAssigns = scopedAssigns.filter((a) => deptMatches(deptMap.get(a.user_id), viewerScope!.deptIds));
   }
 
-  const punchKey = (uid: string, d: string) => `${uid}|${d}`;
-  const punchMap = new Map<string, any[]>();
+  // Keyed by assignment, not (user, day) — a person can have more than one
+  // store visit the same day, each with its own punches.
+  const punchesByAssignment = new Map<string, any[]>();
   for (const p of (punches as any[]) ?? []) {
-    const k = punchKey(p.user_id, p.work_date);
-    const arr = punchMap.get(k) ?? [];
+    if (!p.assignment_id) continue;
+    const arr = punchesByAssignment.get(p.assignment_id) ?? [];
     arr.push(p);
-    punchMap.set(k, arr);
+    punchesByAssignment.set(p.assignment_id, arr);
   }
 
   const byUser = new Map<string, WeeklyRow>();
@@ -611,7 +623,7 @@ export async function getWeeklyAnalysis(
     const row = byUser.get(uid)!;
     const mode: ShiftMode = a.mode === "open" ? "open" : "fixed";
     const windows = Array.isArray(a.windows) ? (a.windows as ShiftWindow[]) : [];
-    const dp = punchMap.get(punchKey(uid, a.work_date)) ?? [];
+    const dp = punchesByAssignment.get(a.id) ?? [];
     const cap = a.attendance_rosters?.overtime_cap_hours ?? null;
     const d = computeDay(mode, windows, dp, a.work_date, cap);
 
@@ -645,56 +657,65 @@ export async function getWeeklyAnalysis(
 }
 
 // ── punch context (for the punch screen) ────────────────────────────────────
+const ASSIGNMENT_SELECT =
+  "id, roster_id, work_date, mode, windows, store_id, stores ( code, name ), attendance_shift_presets ( mid_photo_min )";
+
 export async function getPunchContext(userId: string, dateISO?: string): Promise<PunchContext> {
   const admin = createAdminClient();
   const today = dateISO || todayIST();
   const yesterday = addDaysISO(today, -1);
 
-  // Night shifts anchor to the day they started. If yesterday's assignment
-  // was checked in but never checked out, keep it as the active context —
-  // otherwise someone on a 22:00-06:00 shift would see "no shift today"
-  // after midnight and have no way to check out.
-  const { data: yPunches } = await admin
-    .from("attendance_punches")
-    .select("kind")
-    .eq("user_id", userId)
-    .eq("work_date", yesterday);
-  const yKinds = new Set(((yPunches as any[]) ?? []).map((p) => p.kind));
-  const carriedOver = yKinds.has("check_in") && !yKinds.has("check_out");
-  const date = carriedOver ? yesterday : today;
-
-  const [{ data: assign }, { data: ref }, { data: punches }] = await Promise.all([
-    admin
-      .from("attendance_assignments")
-      .select("id, roster_id, mode, windows, store_id, stores ( code, name ), attendance_shift_presets ( mid_photo_min )")
-      .eq("user_id", userId)
-      .eq("work_date", date)
-      .maybeSingle(),
+  const [{ data: yAssigns }, { data: tAssigns }, { data: ref }, { data: allPunches }] = await Promise.all([
+    admin.from("attendance_assignments").select(ASSIGNMENT_SELECT).eq("user_id", userId).eq("work_date", yesterday),
+    admin.from("attendance_assignments").select(ASSIGNMENT_SELECT).eq("user_id", userId).eq("work_date", today),
     admin.from("attendance_references").select("user_id").eq("user_id", userId).maybeSingle(),
     admin
       .from("attendance_punches")
-      .select("kind, captured_at")
+      .select("assignment_id, kind, captured_at")
       .eq("user_id", userId)
-      .eq("work_date", date)
+      .in("work_date", [yesterday, today])
       .order("captured_at"),
   ]);
 
-  const a = assign as any;
+  const punchesByAssignment = new Map<string, { kind: string; capturedAt: string }[]>();
+  for (const p of (allPunches as any[]) ?? []) {
+    if (!p.assignment_id) continue;
+    const arr = punchesByAssignment.get(p.assignment_id) ?? [];
+    arr.push({ kind: p.kind, capturedAt: p.captured_at });
+    punchesByAssignment.set(p.assignment_id, arr);
+  }
+
+  function toPunchAssignment(a: any, carriedOver: boolean): PunchAssignment {
+    return {
+      assignmentId: a.id,
+      rosterId: a.roster_id,
+      workDate: a.work_date,
+      carriedOver,
+      storeId: a.store_id,
+      storeName: a.stores ? `${a.stores.code} — ${a.stores.name}` : "—",
+      mode: a.mode === "open" ? "open" : "fixed",
+      windows: Array.isArray(a.windows) ? (a.windows as ShiftWindow[]) : [],
+      midPhotoMin: a.attendance_shift_presets?.mid_photo_min ?? 0,
+      punches: punchesByAssignment.get(a.id) ?? [],
+    };
+  }
+
+  // Night shifts anchor to the day they started. Any of yesterday's shifts
+  // that were checked in but never checked out carry forward so there's
+  // still a way to check out after midnight — otherwise someone on a
+  // 22:00-06:00 shift would see "no shift today" with no way to finish.
+  const carried = ((yAssigns as any[]) ?? [])
+    .filter((a) => {
+      const kinds = new Set((punchesByAssignment.get(a.id) ?? []).map((p) => p.kind));
+      return kinds.has("check_in") && !kinds.has("check_out");
+    })
+    .map((a) => toPunchAssignment(a, true));
+
+  const todaysOwn = ((tAssigns as any[]) ?? []).map((a) => toPunchAssignment(a, false));
+
   return {
-    date,
-    carriedOver,
+    today,
     hasReference: !!ref,
-    assignment: a
-      ? {
-          assignmentId: a.id,
-          rosterId: a.roster_id,
-          storeId: a.store_id,
-          storeName: a.stores ? `${a.stores.code} — ${a.stores.name}` : "—",
-          mode: a.mode === "open" ? "open" : "fixed",
-          windows: Array.isArray(a.windows) ? (a.windows as ShiftWindow[]) : [],
-          midPhotoMin: a.attendance_shift_presets?.mid_photo_min ?? 0,
-        }
-      : null,
-    punches: ((punches as any[]) ?? []).map((p) => ({ kind: p.kind, capturedAt: p.captured_at })),
+    assignments: [...carried, ...todaysOwn],
   };
 }

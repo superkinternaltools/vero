@@ -29,6 +29,7 @@ export type RosterRow = {
 export type GridMember = { userId: string; name: string };
 
 export type GridCell = {
+  assignmentId: string;
   presetId: string | null;
   label: string;          // preset name or custom time range
   mode: ShiftMode;
@@ -40,9 +41,9 @@ export type GridCell = {
 export type RosterGrid = {
   roster: RosterRow;
   weekStart: string;
-  days: string[];                                   // 7 ISO dates
+  days: string[];                                     // 7 ISO dates
   members: GridMember[];
-  cells: Record<string, Record<string, GridCell>>;  // userId → date → cell
+  cells: Record<string, Record<string, GridCell[]>>;  // userId → date → shifts that day (0+, different stores)
   presets: PresetRow[];
   stores: { id: string; label: string }[];
 };
@@ -68,6 +69,7 @@ export type PunchDetail = {
 };
 
 export type LogRow = {
+  assignmentId: string;
   userId: string;
   name: string;
   storeId: string;
@@ -106,20 +108,26 @@ export type WeeklyRow = {
   perDayMinutes: number[]; // 7 entries
 };
 
-export type PunchContext = {
-  date: string;
+export type PunchAssignment = {
+  assignmentId: string;
+  rosterId: string;
+  workDate: string; // usually today; yesterday if carried over past midnight
   /** True when this is actually yesterday's still-open shift (overnight
-   * shift crossing midnight), not today's own assignment. */
+   * shift crossing midnight), not one of today's own assignments. */
   carriedOver: boolean;
-  hasReference: boolean;
-  assignment: {
-    assignmentId: string;
-    rosterId: string;
-    storeId: string;
-    storeName: string;
-    mode: ShiftMode;
-    windows: ShiftWindow[];
-    midPhotoMin: number;
-  } | null;
+  storeId: string;
+  storeName: string;
+  mode: ShiftMode;
+  windows: ShiftWindow[];
+  midPhotoMin: number;
   punches: { kind: string; capturedAt: string }[];
+};
+
+export type PunchContext = {
+  today: string;
+  hasReference: boolean;
+  /** One entry per store the person is scheduled at today (a day can have
+   * more than one), plus any of yesterday's shifts still open past
+   * midnight. */
+  assignments: PunchAssignment[];
 };

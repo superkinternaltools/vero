@@ -72,11 +72,13 @@ export async function createRoster(values: {
   holidayDates: string[];
   memberIds: string[];
   /** Optional default schedule — pre-fills the grid for every member on
-   * every matching weekday in the date range. Leave presetId null to create
-   * an empty grid (build it by hand or via bulk upload instead). */
+   * their own matching weekdays in the date range. Leave presetId null to
+   * create an empty grid (build it by hand or via bulk upload instead). */
   defaultPresetId: string | null;
   defaultStoreId: string | null;
-  workingWeekdays: number[]; // 0=Sun .. 6=Sat
+  /** userId -> working weekdays (0=Sun..6=Sat). Members not listed get no
+   * default days (empty grid for them, same as an all-off pattern). */
+  workingWeekdaysByUser: Record<string, number[]>;
 }): Promise<Result & { id?: string; created?: number }> {
   const me = await requireAdmin();
   if (!me) return { error: "Not authorized." };
@@ -104,7 +106,7 @@ export async function createRoster(values: {
   }
 
   let created = 0;
-  if (values.defaultPresetId && values.defaultStoreId && values.workingWeekdays.length && values.memberIds.length) {
+  if (values.defaultPresetId && values.defaultStoreId && values.memberIds.length) {
     const admin = createAdminClient();
     const { data: preset } = await admin
       .from("attendance_shift_presets")
@@ -114,14 +116,16 @@ export async function createRoster(values: {
     if (preset) {
       const mode: ShiftMode = (preset as any).mode === "open" ? "open" : "fixed";
       const windows = (preset as any).windows;
-      const wdSet = new Set(values.workingWeekdays);
       const holidaySet = new Set(values.holidayDates);
+      const userWdSets = new Map(
+        values.memberIds.map((uid) => [uid, new Set(values.workingWeekdaysByUser[uid] ?? [])]),
+      );
       const assignments: any[] = [];
       for (let d = values.startDate; d <= values.endDate; d = addDaysISO(d, 1)) {
         if (holidaySet.has(d)) continue;
         const dow = new Date(d + "T00:00:00Z").getUTCDay();
-        if (!wdSet.has(dow)) continue;
         for (const userId of values.memberIds) {
+          if (!userWdSets.get(userId)!.has(dow)) continue;
           assignments.push({
             roster_id: id,
             user_id: userId,
@@ -136,7 +140,7 @@ export async function createRoster(values: {
       if (assignments.length) {
         const { error: aErr } = await supabase
           .from("attendance_assignments")
-          .upsert(assignments, { onConflict: "user_id,work_date" });
+          .upsert(assignments, { onConflict: "user_id,work_date,store_id" });
         if (!aErr) created = assignments.length;
       }
     }
@@ -230,7 +234,7 @@ export async function upsertAssignment(input: {
       windows,
       store_id: input.storeId,
     },
-    { onConflict: "user_id,work_date" },
+    { onConflict: "user_id,work_date,store_id" },
   );
   if (error) return { error: error.message };
   revalidatePath("/attendance/rosters");
@@ -289,7 +293,7 @@ export async function copyWeek(
       windows: a.windows,
       store_id: a.store_id,
     })),
-    { onConflict: "user_id,work_date" },
+    { onConflict: "user_id,work_date,store_id" },
   );
   if (error) return { error: error.message };
 
@@ -297,14 +301,15 @@ export async function copyWeek(
   return { copied: rows.length };
 }
 
-export async function clearAssignment(userId: string, workDate: string): Promise<Result> {
+/** Removes a single shift (one store visit that day) — a day may still have
+ * other shifts left for the same person. */
+export async function clearAssignment(assignmentId: string): Promise<Result> {
   if (!(await requireAdmin())) return { error: "Not authorized." };
   const supabase = await createClient();
   const { error } = await supabase
     .from("attendance_assignments")
     .delete()
-    .eq("user_id", userId)
-    .eq("work_date", workDate);
+    .eq("id", assignmentId);
   if (error) return { error: error.message };
   revalidatePath("/attendance/rosters");
   return {};
@@ -435,7 +440,7 @@ export async function applyBulk(rosterId: string, rows: BulkRow[]): Promise<Resu
   if (assignments.length) {
     const { error } = await supabase
       .from("attendance_assignments")
-      .upsert(assignments, { onConflict: "user_id,work_date" });
+      .upsert(assignments, { onConflict: "user_id,work_date,store_id" });
     if (error) return { error: error.message };
   }
   revalidatePath("/attendance/rosters");

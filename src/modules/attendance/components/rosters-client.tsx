@@ -9,7 +9,7 @@ import { Modal } from "@/core/ui/modal";
 import { MultiSelect } from "@/core/ui/multi-select";
 import { SelectSearch } from "@/core/ui/select-search";
 import { cn } from "@/core/lib/utils";
-import type { RosterRow, PresetRow, RosterGrid, ShiftMode, ShiftWindow } from "../types";
+import type { RosterRow, PresetRow, RosterGrid, GridCell, ShiftMode, ShiftWindow } from "../types";
 import type { AssignableUser } from "../queries";
 import {
   createRoster,
@@ -38,6 +38,23 @@ function addDaysISO(iso: string, days: number): string {
 }
 function fmtDay(iso: string): string {
   return new Date(iso + "T00:00:00Z").toLocaleDateString("en-IN", { weekday: "short", day: "numeric" });
+}
+
+/** Every calendar month the roster spans, for the month/year jump control. */
+function monthOptions(startDate: string, endDate: string): { value: string; label: string }[] {
+  const opts: { value: string; label: string }[] = [];
+  let d = new Date(startDate.slice(0, 7) + "-01T00:00:00Z");
+  const end = new Date(endDate.slice(0, 7) + "-01T00:00:00Z");
+  while (d.getTime() <= end.getTime()) {
+    const y = d.getUTCFullYear();
+    const m = d.getUTCMonth();
+    opts.push({
+      value: `${y}-${String(m + 1).padStart(2, "0")}`,
+      label: d.toLocaleDateString("en-IN", { month: "short", year: "numeric", timeZone: "UTC" }),
+    });
+    d = new Date(Date.UTC(y, m + 1, 1));
+  }
+  return opts;
 }
 
 const CUSTOM = "__custom__";
@@ -136,6 +153,8 @@ export function RostersClient({
   const [rWorkDays, setRWorkDays] = useState<boolean[]>([false, true, true, true, true, true, true]); // Mon-Sat default
   const [rDefaultPresetId, setRDefaultPresetId] = useState("");
   const [rDefaultStoreId, setRDefaultStoreId] = useState("");
+  // Per-person exceptions to the working-days default above (userId -> its own 7-day pattern).
+  const [rOverrides, setROverrides] = useState<Record<string, boolean[]>>({});
   const [err, setErr] = useState<string | null>(null);
 
   // Presets modal
@@ -171,11 +190,16 @@ export function RostersClient({
   function openNew() {
     setRName(""); setRStart(""); setREnd(""); setRCap(""); setRHolidayList([]); setRMembers([]);
     setRWorkDays([false, true, true, true, true, true, true]);
-    setRDefaultPresetId(""); setRDefaultStoreId(""); setErr(null);
+    setRDefaultPresetId(""); setRDefaultStoreId(""); setROverrides({}); setErr(null);
     setNewOpen(true);
   }
   function submitNew() {
     setErr(null);
+    const toWeekdayIndices = (pattern: boolean[]) => pattern.flatMap((on, i) => (on ? [i] : []));
+    const workingWeekdaysByUser: Record<string, number[]> = {};
+    for (const uid of rMembers) {
+      workingWeekdaysByUser[uid] = toWeekdayIndices(rOverrides[uid] ?? rWorkDays);
+    }
     start(async () => {
       const res = await createRoster({
         name: rName,
@@ -186,7 +210,7 @@ export function RostersClient({
         memberIds: rMembers,
         defaultPresetId: rDefaultPresetId || null,
         defaultStoreId: rDefaultStoreId || null,
-        workingWeekdays: rWorkDays.flatMap((on, i) => (on ? [i] : [])),
+        workingWeekdaysByUser,
       });
       if (res.error) { setErr(res.error); return; }
       setNewOpen(false);
@@ -224,15 +248,22 @@ export function RostersClient({
 
   // members
   function openCell(userId: string, name: string, date: string) {
-    const existing = grid?.cells[userId]?.[date];
     setCell({ userId, name, date });
-    setCPreset(existing?.presetId ?? (existing ? CUSTOM : ""));
-    setCStore(existing?.storeId ?? (grid?.stores[0]?.id ?? ""));
-    if (existing && existing.mode === "fixed" && existing.windows.length) {
-      setCStart(existing.windows[0].start);
-      setCEnd(existing.windows[existing.windows.length - 1].end);
-    }
+    setCPreset("");
+    setCStore(grid?.stores[0]?.id ?? "");
+    setCStart("09:00");
+    setCEnd("18:00");
     setCApplyRow(false);
+  }
+  /** Loads an existing shift for that day back into the add/edit form —
+   * saving again with the same store updates it in place. */
+  function editCellShift(c: GridCell) {
+    setCPreset(c.presetId ?? CUSTOM);
+    setCStore(c.storeId);
+    if (c.mode === "fixed" && c.windows.length) {
+      setCStart(c.windows[0].start);
+      setCEnd(c.windows[c.windows.length - 1].end);
+    }
   }
   function saveCell() {
     if (!cell || !grid || !cStore || !cPreset) return;
@@ -258,7 +289,14 @@ export function RostersClient({
           presetId, mode, windows, punches, storeId: cStore,
         });
       }
-      setCell(null);
+      setCPreset("");
+      setCApplyRow(false);
+      router.refresh();
+    });
+  }
+  function removeCellShift(assignmentId: string) {
+    start(async () => {
+      await clearAssignment(assignmentId);
       router.refresh();
     });
   }
@@ -273,14 +311,6 @@ export function RostersClient({
     });
   }
 
-  function clearCell() {
-    if (!cell) return;
-    start(async () => {
-      await clearAssignment(cell.userId, cell.date);
-      setCell(null);
-      router.refresh();
-    });
-  }
 
   // bulk
   function runValidate() {
@@ -360,6 +390,15 @@ export function RostersClient({
                 <span className="min-w-[110px] text-center text-sm font-medium">Week of {fmtDay(grid.weekStart)}</span>
                 <button onClick={() => router.push(`/attendance/rosters?roster=${grid.roster.id}&week=${addDaysISO(grid.weekStart, 7)}`)} className="rounded p-1 hover:bg-muted"><ChevronRight className="h-4 w-4" /></button>
               </div>
+              <select
+                value={grid.weekStart.slice(0, 7)}
+                onChange={(e) => router.push(`/attendance/rosters?roster=${grid.roster.id}&week=${e.target.value}-01`)}
+                className="rounded-xl border border-transparent bg-input px-2.5 py-2 text-sm text-foreground focus:border-primary focus:bg-card focus:outline-none"
+              >
+                {monthOptions(grid.roster.startDate, grid.roster.endDate).map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
               {grid.roster.overtimeCapHours != null && (
                 <span className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">OT cap {grid.roster.overtimeCapHours}h</span>
               )}
@@ -412,21 +451,23 @@ export function RostersClient({
                       </span>
                     </td>
                     {grid.days.map((d) => {
-                      const c = grid.cells[m.userId]?.[d];
+                      const shifts = grid.cells[m.userId]?.[d] ?? [];
                       return (
                         <td key={d} className="align-top">
                           <button
                             onClick={() => openCell(m.userId, m.name, d)}
                             className={cn(
-                              "h-full min-w-[92px] rounded-lg border p-1.5 text-left transition-colors",
-                              c ? "border-border bg-primary/5 hover:border-primary/50" : "border-dashed border-border text-muted-foreground hover:border-muted-foreground",
+                              "h-full min-w-[92px] space-y-1 rounded-lg border p-1.5 text-left transition-colors",
+                              shifts.length ? "border-border bg-primary/5 hover:border-primary/50" : "border-dashed border-border text-muted-foreground hover:border-muted-foreground",
                             )}
                           >
-                            {c ? (
-                              <>
-                                <div className="text-xs font-semibold text-foreground">{c.label}</div>
-                                <div className="text-[11px] text-muted-foreground">{c.storeName}</div>
-                              </>
+                            {shifts.length ? (
+                              shifts.map((c) => (
+                                <div key={c.assignmentId}>
+                                  <div className="text-xs font-semibold text-foreground">{c.label}</div>
+                                  <div className="text-[11px] text-muted-foreground">{c.storeName}</div>
+                                </div>
+                              ))
                             ) : (
                               <div className="text-xs">Off</div>
                             )}
@@ -519,6 +560,7 @@ export function RostersClient({
 
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-foreground">Working days</label>
+              <p className="text-xs text-muted-foreground">The default for everyone below — add exceptions per person underneath.</p>
               <div className="flex gap-1.5">
                 {WEEKDAY_LABELS.map((lbl, i) => (
                   <button
@@ -535,6 +577,68 @@ export function RostersClient({
                 ))}
               </div>
             </div>
+
+            {rMembers.length > 0 && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">Different days for someone?</label>
+                <SelectSearch
+                  value={null}
+                  onChange={(uid) => {
+                    if (!uid) return;
+                    setROverrides((ov) => ({ ...ov, [uid]: ov[uid] ?? [...rWorkDays] }));
+                  }}
+                  options={rMembers
+                    .filter((uid) => !(uid in rOverrides))
+                    .map((uid) => ({ id: uid, label: users.find((u) => u.id === uid)?.name ?? uid }))}
+                  placeholder="Add an exception for…"
+                />
+                {Object.keys(rOverrides)
+                  .filter((uid) => rMembers.includes(uid))
+                  .map((uid) => (
+                    <div key={uid} className="flex items-center gap-2 rounded-lg border border-border px-3 py-2">
+                      <span className="w-28 flex-shrink-0 truncate text-sm text-foreground">
+                        {users.find((u) => u.id === uid)?.name ?? uid}
+                      </span>
+                      <div className="flex flex-1 gap-1">
+                        {WEEKDAY_LABELS.map((lbl, i) => (
+                          <button
+                            key={i}
+                            type="button"
+                            onClick={() =>
+                              setROverrides((ov) => ({
+                                ...ov,
+                                [uid]: ov[uid].map((v, j) => (j === i ? !v : v)),
+                              }))
+                            }
+                            className={cn(
+                              "flex h-7 w-7 items-center justify-center rounded-full border text-[11px] font-semibold",
+                              rOverrides[uid][i]
+                                ? "border-primary bg-primary text-primary-foreground"
+                                : "border-border text-muted-foreground",
+                            )}
+                          >
+                            {lbl}
+                          </button>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setROverrides((ov) => {
+                            const next = { ...ov };
+                            delete next[uid];
+                            return next;
+                          })
+                        }
+                        className="rounded p-1 text-muted-foreground hover:text-danger"
+                        aria-label="Remove exception"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+              </div>
+            )}
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
@@ -591,8 +695,40 @@ export function RostersClient({
       <Modal open={!!cell} onClose={() => setCell(null)} title={cell ? `${cell.name} · ${fmtDay(cell.date)}` : ""}>
         {cell && (
           <div className="space-y-4">
+            {(() => {
+              const dayShifts = grid?.cells[cell.userId]?.[cell.date] ?? [];
+              if (dayShifts.length === 0) return null;
+              return (
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-foreground">
+                    {dayShifts.length > 1 ? "Shifts this day (multiple stores)" : "Shift this day"}
+                  </label>
+                  <div className="space-y-1.5">
+                    {dayShifts.map((c) => (
+                      <div key={c.assignmentId} className="flex items-center justify-between rounded-lg border border-border px-3 py-2 text-sm">
+                        <button type="button" onClick={() => editCellShift(c)} className="flex-1 text-left">
+                          <span className="font-medium text-foreground">{c.storeName}</span>
+                          <span className="ml-2 text-muted-foreground">{c.label}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeCellShift(c.assignmentId)}
+                          disabled={pending}
+                          className="rounded p-1 text-muted-foreground hover:text-danger"
+                          aria-label="Remove shift"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
             <div className="space-y-1.5">
-              <label className="text-sm font-medium text-foreground">Shift</label>
+              <label className="text-sm font-medium text-foreground">Add a shift for this day</label>
+              <p className="text-xs text-muted-foreground">Pick a different store from an existing shift above to add another visit the same day; pick the same store to edit it.</p>
               <SelectSearch
                 value={cPreset || null}
                 onChange={(v) => setCPreset(v ?? "")}
@@ -612,14 +748,11 @@ export function RostersClient({
             </div>
             <label className="flex items-center gap-2 text-sm text-foreground">
               <input type="checkbox" checked={cApplyRow} onChange={(e) => setCApplyRow(e.target.checked)} className="h-4 w-4 rounded accent-primary" />
-              Apply to this person&apos;s whole week
+              Apply this shift to this person&apos;s whole week
             </label>
-            <div className="flex justify-between gap-2">
-              <Button variant="ghost" size="md" onClick={clearCell} disabled={pending}>Mark off</Button>
-              <div className="flex gap-2">
-                <Button variant="outline" size="md" onClick={() => setCell(null)}>Cancel</Button>
-                <Button size="md" onClick={saveCell} disabled={pending || !cPreset || !cStore}>Save</Button>
-              </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="md" onClick={() => setCell(null)}>Close</Button>
+              <Button size="md" onClick={saveCell} disabled={pending || !cPreset || !cStore}>Save shift</Button>
             </div>
           </div>
         )}
