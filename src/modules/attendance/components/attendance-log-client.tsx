@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight, Download, MapPin } from "lucide-react";
 import { Button } from "@/core/ui/button";
 import { Modal } from "@/core/ui/modal";
+import { MultiSelect } from "@/core/ui/multi-select";
 import { cn } from "@/core/lib/utils";
 import { markPunchReviewed, resetReference } from "../actions";
 import { AttendanceTabs } from "./attendance-tabs";
@@ -34,23 +35,39 @@ export function AttendanceLogClient({
   log,
   date,
   today,
+  roleOptions,
+  deptOptions,
+  storeOptions,
 }: {
   log: AttendanceLog;
   date: string;
   today: string;
+  roleOptions: { id: string; label: string }[];
+  deptOptions: { id: string; label: string }[];
+  storeOptions: { id: string; label: string }[];
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [detail, setDetail] = useState<LogRow | null>(null);
+  const [fRoles, setFRoles] = useState<string[]>([]);
+  const [fDepts, setFDepts] = useState<string[]>([]);
+  const [fStores, setFStores] = useState<string[]>([]);
 
   const go = (d: string) => router.push(`/attendance?date=${d}`);
   const dateLabel = new Date(date + "T00:00:00Z").toLocaleDateString("en-IN", {
     weekday: "short", day: "numeric", month: "short", year: "numeric",
   });
 
+  const visibleRows = log.rows.filter((r) => {
+    if (fRoles.length && !r.roleIds.some((id) => fRoles.includes(id))) return false;
+    if (fDepts.length && !r.departmentIds.some((id) => fDepts.includes(id))) return false;
+    if (fStores.length && !fStores.includes(r.storeId)) return false;
+    return true;
+  });
+
   function exportCsv() {
     const head = ["Person", "Store", "Shift", "Check-in", "Check-out", "Worked", "Overtime (min)", "Status", "Flags"];
-    const lines = log.rows.map((r) =>
+    const lines = visibleRows.map((r) =>
       [r.name, r.storeName, r.shiftLabel, r.checkIn ?? "", r.checkOut ?? "", fmtMins(r.workedMinutes), r.overtimeMinutes, STATUS[r.status].label, r.flags.join("|")]
         .map((c) => `"${String(c).replace(/"/g, '""')}"`)
         .join(","),
@@ -65,11 +82,11 @@ export function AttendanceLogClient({
   }
 
   const tiles = [
-    { n: log.summary.expected, l: "Expected", cls: "text-foreground" },
-    { n: log.summary.present, l: "Present", cls: "text-success" },
-    { n: log.summary.late, l: "Late arrival", cls: "text-warning" },
-    { n: log.summary.absent, l: "Absent", cls: "text-danger" },
-    { n: log.summary.flagged, l: "Flagged", cls: "text-danger" },
+    { n: visibleRows.length, l: "Expected", cls: "text-foreground" },
+    { n: visibleRows.filter((r) => r.checkIn != null).length, l: "Present", cls: "text-success" },
+    { n: visibleRows.filter((r) => r.status === "late").length, l: "Late arrival", cls: "text-warning" },
+    { n: visibleRows.filter((r) => r.status === "absent").length, l: "Absent", cls: "text-danger" },
+    { n: visibleRows.filter((r) => r.flags.length > 0).length, l: "Flagged", cls: "text-danger" },
   ];
 
   return (
@@ -98,13 +115,19 @@ export function AttendanceLogClient({
           {date !== today && (
             <Button variant="outline" size="md" onClick={() => go(today)}>Today</Button>
           )}
-          {log.rows.length > 0 && (
+          {visibleRows.length > 0 && (
             <Button variant="outline" size="md" onClick={exportCsv}>
               <Download className="h-4 w-4" />
               Export
             </Button>
           )}
         </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <MultiSelect options={roleOptions} selected={fRoles} onChange={setFRoles} placeholder="Filter by role…" />
+        <MultiSelect options={deptOptions} selected={fDepts} onChange={setFDepts} placeholder="Filter by department…" />
+        <MultiSelect options={storeOptions} selected={fStores} onChange={setFStores} placeholder="Filter by store…" />
       </div>
 
       <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-5">
@@ -131,7 +154,7 @@ export function AttendanceLogClient({
             </tr>
           </thead>
           <tbody>
-            {log.rows.map((r) => (
+            {visibleRows.map((r) => (
               <tr
                 key={r.userId}
                 onClick={() => setDetail(r)}
@@ -163,10 +186,10 @@ export function AttendanceLogClient({
                 </td>
               </tr>
             ))}
-            {log.rows.length === 0 && (
+            {visibleRows.length === 0 && (
               <tr>
                 <td colSpan={8} className="p-10 text-center text-sm text-muted-foreground">
-                  No one was rostered on this day.
+                  {log.rows.length === 0 ? "No one was rostered on this day." : "No one matches these filters."}
                 </td>
               </tr>
             )}

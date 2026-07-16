@@ -111,6 +111,22 @@ function deptMatches(personDepts: Set<string> | undefined, viewerDeptIds: Set<st
   return false;
 }
 
+/** Roles for a set of users, as user_id -> Set(role_id). */
+async function getUserRoleMap(
+  admin: ReturnType<typeof createAdminClient>,
+  userIds: string[],
+): Promise<Map<string, Set<string>>> {
+  const map = new Map<string, Set<string>>();
+  if (!userIds.length) return map;
+  const { data } = await admin.from("user_roles").select("user_id, role_id").in("user_id", userIds);
+  for (const row of (data as any[]) ?? []) {
+    const s = map.get(row.user_id) ?? new Set<string>();
+    s.add(row.role_id);
+    map.set(row.user_id, s);
+  }
+  return map;
+}
+
 // ── photo access (private bucket — signed URLs, never a stored public URL) ──
 async function signPaths(
   admin: ReturnType<typeof createAdminClient>,
@@ -206,15 +222,53 @@ export async function listAllStores(): Promise<{ id: string; label: string }[]> 
 }
 
 /** Active users that can be placed on a roster. */
-export async function listAssignableUsers(): Promise<{ id: string; name: string }[]> {
+export type AssignableUser = {
+  id: string;
+  name: string;
+  roleIds: string[];
+  departmentIds: string[];
+  storeIds: string[];
+};
+
+export async function listAssignableUsers(): Promise<AssignableUser[]> {
   const admin = createAdminClient();
   const { data } = await admin
     .from("profiles")
-    .select("id, display_name, email")
+    .select(
+      `
+      id, display_name, email,
+      user_roles ( role_id ),
+      user_departments ( department_id ),
+      user_stores ( store_id )
+      `,
+    )
     .eq("status", "active")
     .is("deleted_at", null)
     .order("display_name");
-  return ((data as any[]) ?? []).map((p) => ({ id: p.id, name: p.display_name || p.email }));
+  return ((data as any[]) ?? []).map((p) => ({
+    id: p.id,
+    name: p.display_name || p.email,
+    roleIds: (p.user_roles ?? []).map((r: any) => r.role_id),
+    departmentIds: (p.user_departments ?? []).map((d: any) => d.department_id),
+    storeIds: (p.user_stores ?? []).map((s: any) => s.store_id),
+  }));
+}
+
+/** Role and department options for the people-filter pickers (roster
+ * creation, Log filters). */
+export async function listRoleAndDeptOptions(): Promise<{
+  roles: { id: string; label: string }[];
+  departments: { id: string; label: string }[];
+}> {
+  const admin = createAdminClient();
+  const [{ data: roles }, { data: depts }] = await Promise.all([
+    admin.from("roles").select("id, name").order("name"),
+    admin.from("departments").select("id, name").order("name"),
+  ]);
+  return {
+    roles: ((roles as any[]) ?? []).map((r) => ({ id: r.id, label: r.name })),
+    departments: ((depts as any[]) ?? []).map((d) => ({ id: d.id, label: d.name })),
+  };
 }
 
 export async function getRosterGrid(
@@ -427,6 +481,11 @@ export async function getAttendanceLog(
     ...((punches as any[]) ?? []).map((p) => p.photo_path),
   ]);
 
+  const [personRoleMap, personDeptMap] = await Promise.all([
+    getUserRoleMap(admin, userIds),
+    getUserDeptMap(admin, userIds),
+  ]);
+
   const rows: LogRow[] = scopedAssigns.map((a) => {
     const mode: ShiftMode = a.mode === "open" ? "open" : "fixed";
     const windows = Array.isArray(a.windows) ? (a.windows as ShiftWindow[]) : [];
@@ -441,7 +500,10 @@ export async function getAttendanceLog(
     return {
       userId: a.user_id,
       name: a.profiles?.display_name || a.profiles?.email || "—",
+      storeId: a.store_id,
       storeName: a.stores ? `${a.stores.code}` : "—",
+      roleIds: [...(personRoleMap.get(a.user_id) ?? [])],
+      departmentIds: [...(personDeptMap.get(a.user_id) ?? [])],
       shiftLabel,
       mode,
       checkIn: d.checkIn,

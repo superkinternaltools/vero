@@ -10,6 +10,7 @@ import { MultiSelect } from "@/core/ui/multi-select";
 import { SelectSearch } from "@/core/ui/select-search";
 import { cn } from "@/core/lib/utils";
 import type { RosterRow, PresetRow, RosterGrid, ShiftMode, ShiftWindow } from "../types";
+import type { AssignableUser } from "../queries";
 import {
   createRoster,
   deleteRoster,
@@ -43,18 +44,81 @@ const CUSTOM = "__custom__";
 
 const WEEKDAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"]; // 0=Sun..6=Sat
 
+/** Filter a person picker by role / department / store instead of hunting
+ * through names one at a time — narrow with the filters, then either pick
+ * individually below or add everyone who matched in one click. */
+function PeoplePicker({
+  users,
+  roleOptions,
+  deptOptions,
+  storeOptions,
+  selected,
+  onChange,
+}: {
+  users: AssignableUser[];
+  roleOptions: { id: string; label: string }[];
+  deptOptions: { id: string; label: string }[];
+  storeOptions: { id: string; label: string }[];
+  selected: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const [fRoles, setFRoles] = useState<string[]>([]);
+  const [fDepts, setFDepts] = useState<string[]>([]);
+  const [fStores, setFStores] = useState<string[]>([]);
+
+  const hasFilter = fRoles.length > 0 || fDepts.length > 0 || fStores.length > 0;
+  const filtered = users.filter((u) => {
+    if (fRoles.length && !u.roleIds.some((id) => fRoles.includes(id))) return false;
+    if (fDepts.length && !u.departmentIds.some((id) => fDepts.includes(id))) return false;
+    if (fStores.length && !u.storeIds.some((id) => fStores.includes(id))) return false;
+    return true;
+  });
+
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-3 gap-2">
+        <MultiSelect options={roleOptions} selected={fRoles} onChange={setFRoles} placeholder="Role…" />
+        <MultiSelect options={deptOptions} selected={fDepts} onChange={setFDepts} placeholder="Department…" />
+        <MultiSelect options={storeOptions} selected={fStores} onChange={setFStores} placeholder="Store…" />
+      </div>
+      {hasFilter && (
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span>{filtered.length} match{filtered.length !== 1 ? "es" : ""}</span>
+          <button
+            type="button"
+            onClick={() => onChange([...new Set([...selected, ...filtered.map((u) => u.id)])])}
+            className="font-medium text-primary hover:underline"
+          >
+            + add all matching
+          </button>
+        </div>
+      )}
+      <MultiSelect
+        options={(hasFilter ? filtered : users).map((u) => ({ id: u.id, label: u.name }))}
+        selected={selected}
+        onChange={onChange}
+        placeholder="Add people…"
+      />
+    </div>
+  );
+}
+
 export function RostersClient({
   rosters,
   presets,
   users,
   stores,
+  roleOptions,
+  deptOptions,
   grid,
   selectedRosterId,
 }: {
   rosters: RosterRow[];
   presets: PresetRow[];
-  users: { id: string; name: string }[];
+  users: AssignableUser[];
   stores: { id: string; label: string }[];
+  roleOptions: { id: string; label: string }[];
+  deptOptions: { id: string; label: string }[];
   grid: RosterGrid | null;
   selectedRosterId: string | null;
 }) {
@@ -434,7 +498,14 @@ export function RostersClient({
 
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-foreground">People</label>
-            <MultiSelect options={users.map((u) => ({ id: u.id, label: u.name }))} selected={rMembers} onChange={setRMembers} placeholder="Add people…" />
+            <PeoplePicker
+              users={users}
+              roleOptions={roleOptions}
+              deptOptions={deptOptions}
+              storeOptions={stores}
+              selected={rMembers}
+              onChange={setRMembers}
+            />
           </div>
 
           <div className="rounded-xl border border-border p-4 space-y-3">
@@ -499,7 +570,14 @@ export function RostersClient({
       {/* Add members modal */}
       <Modal open={membersOpen} onClose={() => setMembersOpen(false)} title="Add people to roster">
         <div className="space-y-4">
-          <MultiSelect options={addable.map((u) => ({ id: u.id, label: u.name }))} selected={addIds} onChange={setAddIds} placeholder="Select people…" />
+          <PeoplePicker
+            users={addable}
+            roleOptions={roleOptions}
+            deptOptions={deptOptions}
+            storeOptions={stores}
+            selected={addIds}
+            onChange={setAddIds}
+          />
           <div className="flex justify-end gap-2">
             <Button variant="outline" size="md" onClick={() => setMembersOpen(false)}>Cancel</Button>
             <Button size="md" disabled={pending || !addIds.length} onClick={() => {
@@ -586,12 +664,26 @@ export function RostersClient({
             {pMode === "fixed" ? (
               <div className="space-y-2">
                 {pWindows.map((w, i) => (
-                  <div key={i} className="flex flex-wrap items-center gap-2">
-                    <input value={w.label} onChange={(e) => setPWindows((ws) => ws.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} className={cn(selectClass, "flex-1 min-w-[110px]")} placeholder="Label" />
-                    <input type="time" value={w.start} onChange={(e) => setPWindows((ws) => ws.map((x, j) => j === i ? { ...x, start: e.target.value } : x))} className={cn(selectClass, "w-28")} />
-                    <input type="time" value={w.end} onChange={(e) => setPWindows((ws) => ws.map((x, j) => j === i ? { ...x, end: e.target.value } : x))} className={cn(selectClass, "w-28")} />
-                    <input type="number" value={w.graceMin} onChange={(e) => setPWindows((ws) => ws.map((x, j) => j === i ? { ...x, graceMin: Number(e.target.value) } : x))} className={cn(selectClass, "w-20")} title="Grace (min)" />
-                    <button onClick={() => setPWindows((ws) => ws.filter((_, j) => j !== i))} className="rounded p-1 text-muted-foreground hover:text-danger"><X className="h-4 w-4" /></button>
+                  <div key={i} className="rounded-lg border border-border p-2.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-medium text-muted-foreground">Window label</label>
+                      <button onClick={() => setPWindows((ws) => ws.filter((_, j) => j !== i))} className="rounded p-1 text-muted-foreground hover:text-danger"><X className="h-4 w-4" /></button>
+                    </div>
+                    <input value={w.label} onChange={(e) => setPWindows((ws) => ws.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} className={cn(selectClass, "mb-2")} placeholder="e.g. Check-in" />
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-muted-foreground">Start time</label>
+                        <input type="time" value={w.start} onChange={(e) => setPWindows((ws) => ws.map((x, j) => j === i ? { ...x, start: e.target.value } : x))} className={selectClass} />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-muted-foreground">End time</label>
+                        <input type="time" value={w.end} onChange={(e) => setPWindows((ws) => ws.map((x, j) => j === i ? { ...x, end: e.target.value } : x))} className={selectClass} />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-muted-foreground">Grace (min)</label>
+                        <input type="number" value={w.graceMin} onChange={(e) => setPWindows((ws) => ws.map((x, j) => j === i ? { ...x, graceMin: Number(e.target.value) } : x))} className={selectClass} />
+                      </div>
+                    </div>
                   </div>
                 ))}
                 <button onClick={() => setPWindows((ws) => [...ws, { label: "Window", start: "09:00", end: "09:30", graceMin: 0 }])} className="text-sm font-medium text-primary hover:underline">+ add window</button>

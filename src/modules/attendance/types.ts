@@ -70,7 +70,10 @@ export type PunchDetail = {
 export type LogRow = {
   userId: string;
   name: string;
+  storeId: string;
   storeName: string;
+  roleIds: string[];
+  departmentIds: string[];
   shiftLabel: string;
   mode: ShiftMode;
   checkIn: string | null;   // "HH:MM" IST
