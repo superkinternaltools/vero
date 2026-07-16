@@ -199,6 +199,12 @@ async function listStoreOptions(admin: ReturnType<typeof createAdminClient>) {
   return ((data as any[]) ?? []).map((s) => ({ id: s.id, label: `${s.code} — ${s.name}` }));
 }
 
+/** Stores for pickers outside the roster grid (e.g. the New roster modal's
+ * default-schedule store, before any roster/grid exists yet). */
+export async function listAllStores(): Promise<{ id: string; label: string }[]> {
+  return listStoreOptions(createAdminClient());
+}
+
 /** Active users that can be placed on a roster. */
 export async function listAssignableUsers(): Promise<{ id: string; name: string }[]> {
   const admin = createAdminClient();

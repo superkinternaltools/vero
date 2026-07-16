@@ -41,16 +41,20 @@ function fmtDay(iso: string): string {
 
 const CUSTOM = "__custom__";
 
+const WEEKDAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"]; // 0=Sun..6=Sat
+
 export function RostersClient({
   rosters,
   presets,
   users,
+  stores,
   grid,
   selectedRosterId,
 }: {
   rosters: RosterRow[];
   presets: PresetRow[];
   users: { id: string; name: string }[];
+  stores: { id: string; label: string }[];
   grid: RosterGrid | null;
   selectedRosterId: string | null;
 }) {
@@ -63,8 +67,11 @@ export function RostersClient({
   const [rStart, setRStart] = useState("");
   const [rEnd, setREnd] = useState("");
   const [rCap, setRCap] = useState("");
-  const [rHolidays, setRHolidays] = useState("");
+  const [rHolidayList, setRHolidayList] = useState<string[]>([]);
   const [rMembers, setRMembers] = useState<string[]>([]);
+  const [rWorkDays, setRWorkDays] = useState<boolean[]>([false, true, true, true, true, true, true]); // Mon-Sat default
+  const [rDefaultPresetId, setRDefaultPresetId] = useState("");
+  const [rDefaultStoreId, setRDefaultStoreId] = useState("");
   const [err, setErr] = useState<string | null>(null);
 
   // Presets modal
@@ -98,7 +105,9 @@ export function RostersClient({
   const [bulkRows, setBulkRows] = useState<BulkRow[]>([]);
 
   function openNew() {
-    setRName(""); setRStart(""); setREnd(""); setRCap(""); setRHolidays(""); setRMembers([]); setErr(null);
+    setRName(""); setRStart(""); setREnd(""); setRCap(""); setRHolidayList([]); setRMembers([]);
+    setRWorkDays([false, true, true, true, true, true, true]);
+    setRDefaultPresetId(""); setRDefaultStoreId(""); setErr(null);
     setNewOpen(true);
   }
   function submitNew() {
@@ -109,8 +118,11 @@ export function RostersClient({
         startDate: rStart,
         endDate: rEnd,
         overtimeCapHours: rCap.trim() ? Number(rCap) : null,
-        holidayDates: rHolidays.split(",").map((s) => s.trim()).filter((s) => /^\d{4}-\d{2}-\d{2}$/.test(s)),
+        holidayDates: rHolidayList.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)),
         memberIds: rMembers,
+        defaultPresetId: rDefaultPresetId || null,
+        defaultStoreId: rDefaultStoreId || null,
+        workingWeekdays: rWorkDays.flatMap((on, i) => (on ? [i] : [])),
       });
       if (res.error) { setErr(res.error); return; }
       setNewOpen(false);
@@ -385,14 +397,97 @@ export function RostersClient({
             <div className="space-y-1.5"><label className="text-sm font-medium text-foreground">Start date</label><Input type="date" value={rStart} onChange={(e) => setRStart(e.target.value)} /></div>
             <div className="space-y-1.5"><label className="text-sm font-medium text-foreground">End date</label><Input type="date" value={rEnd} onChange={(e) => setREnd(e.target.value)} /></div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5"><label className="text-sm font-medium text-foreground">Overtime cap (hours)</label><Input type="number" value={rCap} onChange={(e) => setRCap(e.target.value)} placeholder="blank = uncapped" /></div>
-            <div className="space-y-1.5"><label className="text-sm font-medium text-foreground">Holidays (YYYY-MM-DD, comma)</label><Input value={rHolidays} onChange={(e) => setRHolidays(e.target.value)} placeholder="2026-07-15, …" /></div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium text-foreground">Overtime cap (hours)</label>
+            <Input type="number" value={rCap} onChange={(e) => setRCap(e.target.value)} placeholder="blank = uncapped" />
           </div>
+
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium text-foreground">Holidays</label>
+            <div className="space-y-1.5">
+              {rHolidayList.map((d, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <Input
+                    type="date"
+                    value={d}
+                    onChange={(e) => setRHolidayList((list) => list.map((x, j) => (j === i ? e.target.value : x)))}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setRHolidayList((list) => list.filter((_, j) => j !== i))}
+                    className="rounded p-1.5 text-muted-foreground hover:text-danger"
+                    aria-label="Remove holiday"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => setRHolidayList((list) => [...list, ""])}
+                className="text-sm font-medium text-primary hover:underline"
+              >
+                + add a holiday
+              </button>
+            </div>
+          </div>
+
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-foreground">People</label>
             <MultiSelect options={users.map((u) => ({ id: u.id, label: u.name }))} selected={rMembers} onChange={setRMembers} placeholder="Add people…" />
           </div>
+
+          <div className="rounded-xl border border-border p-4 space-y-3">
+            <div>
+              <p className="text-sm font-semibold text-foreground">Default schedule</p>
+              <p className="text-xs text-muted-foreground">
+                Pre-fills the grid for these people on their working days. Leave the shift blank to start
+                with an empty grid instead — you can always build it by hand or bulk upload afterward.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">Working days</label>
+              <div className="flex gap-1.5">
+                {WEEKDAY_LABELS.map((lbl, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => setRWorkDays((wd) => wd.map((v, j) => (j === i ? !v : v)))}
+                    className={cn(
+                      "flex h-8 w-8 items-center justify-center rounded-full border text-xs font-semibold",
+                      rWorkDays[i] ? "border-primary bg-primary text-primary-foreground" : "border-border text-muted-foreground",
+                    )}
+                  >
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">Default shift</label>
+                <SelectSearch
+                  value={rDefaultPresetId || null}
+                  onChange={(v) => setRDefaultPresetId(v ?? "")}
+                  options={presets.map((p) => ({ id: p.id, label: `${p.name} (${p.mode})` }))}
+                  placeholder="None — leave empty"
+                  emptyText="No presets yet — add one in Shift presets."
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">Store</label>
+                <SelectSearch
+                  value={rDefaultStoreId || null}
+                  onChange={(v) => setRDefaultStoreId(v ?? "")}
+                  options={stores}
+                  placeholder="Pick a store…"
+                />
+              </div>
+            </div>
+          </div>
+
           {err && <p className="text-sm font-medium text-danger">{err}</p>}
           <div className="flex justify-end gap-2">
             <Button variant="outline" size="md" onClick={() => setNewOpen(false)}>Cancel</Button>

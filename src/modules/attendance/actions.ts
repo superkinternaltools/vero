@@ -71,7 +71,13 @@ export async function createRoster(values: {
   overtimeCapHours: number | null;
   holidayDates: string[];
   memberIds: string[];
-}): Promise<Result & { id?: string }> {
+  /** Optional default schedule — pre-fills the grid for every member on
+   * every matching weekday in the date range. Leave presetId null to create
+   * an empty grid (build it by hand or via bulk upload instead). */
+  defaultPresetId: string | null;
+  defaultStoreId: string | null;
+  workingWeekdays: number[]; // 0=Sun .. 6=Sat
+}): Promise<Result & { id?: string; created?: number }> {
   const me = await requireAdmin();
   if (!me) return { error: "Not authorized." };
   if (!values.name.trim()) return { error: "Name is required." };
@@ -96,8 +102,48 @@ export async function createRoster(values: {
       .from("attendance_roster_members")
       .insert(values.memberIds.map((user_id) => ({ roster_id: id, user_id })));
   }
+
+  let created = 0;
+  if (values.defaultPresetId && values.defaultStoreId && values.workingWeekdays.length && values.memberIds.length) {
+    const admin = createAdminClient();
+    const { data: preset } = await admin
+      .from("attendance_shift_presets")
+      .select("mode, windows")
+      .eq("id", values.defaultPresetId)
+      .maybeSingle();
+    if (preset) {
+      const mode: ShiftMode = (preset as any).mode === "open" ? "open" : "fixed";
+      const windows = (preset as any).windows;
+      const wdSet = new Set(values.workingWeekdays);
+      const holidaySet = new Set(values.holidayDates);
+      const assignments: any[] = [];
+      for (let d = values.startDate; d <= values.endDate; d = addDaysISO(d, 1)) {
+        if (holidaySet.has(d)) continue;
+        const dow = new Date(d + "T00:00:00Z").getUTCDay();
+        if (!wdSet.has(dow)) continue;
+        for (const userId of values.memberIds) {
+          assignments.push({
+            roster_id: id,
+            user_id: userId,
+            work_date: d,
+            preset_id: values.defaultPresetId,
+            mode,
+            windows,
+            store_id: values.defaultStoreId,
+          });
+        }
+      }
+      if (assignments.length) {
+        const { error: aErr } = await supabase
+          .from("attendance_assignments")
+          .upsert(assignments, { onConflict: "user_id,work_date" });
+        if (!aErr) created = assignments.length;
+      }
+    }
+  }
+
   revalidatePath("/attendance/rosters");
-  return { id };
+  return { id, created };
 }
 
 export async function updateRoster(
