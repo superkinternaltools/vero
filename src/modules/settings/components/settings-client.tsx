@@ -50,6 +50,7 @@ export function SettingsClient({
   const [needs, setNeeds] = useState(settings.health_needs_attention ?? "50");
   const [windowDays, setWindowDays] = useState(settings.store_score_window_days ?? "60");
   const [geofence, setGeofence] = useState(settings.geofence_radius_m ?? "150");
+  const [attnGeofence, setAttnGeofence] = useState(settings.attendance_geofence_radius_m ?? "150");
   const [sysInstruction, setSysInstruction] = useState(
     settings.ai_system_instruction ??
       "You are a retail execution auditor for SuperK. Score the provided store execution photos against the reference images, instructions, and rubric. Respond ONLY with JSON: {\"score\": <number 0-10>, \"assessment\": [<3-5 short bullet strings>]}.",
@@ -64,6 +65,7 @@ export function SettingsClient({
         health_needs_attention: needs,
         store_score_window_days: windowDays,
         geofence_radius_m: geofence,
+        attendance_geofence_radius_m: attnGeofence,
         ai_system_instruction: sysInstruction,
       });
       setSaved(true);
@@ -109,6 +111,10 @@ export function SettingsClient({
           <div className="space-y-1.5">
             <label className={labelClass}>Geofence radius (metres)</label>
             <Input type="number" value={geofence} onChange={(e) => setGeofence(e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <label className={labelClass}>Attendance geofence radius (metres)</label>
+            <Input type="number" value={attnGeofence} onChange={(e) => setAttnGeofence(e.target.value)} />
           </div>
         </div>
         <div className="mt-4 flex items-center gap-3">

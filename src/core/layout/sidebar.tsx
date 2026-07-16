@@ -14,6 +14,8 @@ import {
   Users,
   Building2,
   Settings,
+  CalendarClock,
+  Camera,
   LogOut,
 } from "lucide-react";
 import { signOutAction } from "@/modules/auth/actions";
@@ -29,6 +31,7 @@ const groups: Group[] = [
       { key: "dashboard", name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
       { key: "tasks", name: "Tasks", href: "/tasks", icon: ClipboardList },
       { key: "review", name: "Review", href: "/review", icon: ListChecks },
+      { key: "attendance_punch", name: "My attendance", href: "/attendance/punch", icon: Camera },
     ],
   },
   {
@@ -43,6 +46,7 @@ const groups: Group[] = [
     label: "Manage",
     items: [
       { key: "campaigns", name: "Campaigns", href: "/campaigns", icon: Megaphone },
+      { key: "attendance", name: "Attendance", href: "/attendance", icon: CalendarClock },
       { key: "stores", name: "Stores", href: "/stores", icon: Store },
       { key: "users", name: "Users", href: "/users", icon: Users },
       { key: "org", name: "Roles & Departments", href: "/org", icon: Building2 },
