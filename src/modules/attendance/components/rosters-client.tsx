@@ -378,7 +378,19 @@ export function RostersClient({
       .filter(Boolean)
       .filter((l) => !/^employee\s*,/i.test(l))
       .map((l) => {
-        const [employee = "", preset = "", store = "", weekdays = "", startD = "", endD = ""] = l.split(",").map((c) => c.trim());
+        // Weekdays and the row's own field separator are both commas, so a
+        // naturally-typed "Tue, Wed, Thu" would otherwise shove Wed/Thu into
+        // the date slots. Dates are always the last two fields and
+        // employee/preset/store are always the first three, so everything
+        // in between — however many comma-separated weekdays — is the
+        // weekdays field.
+        const parts = l.split(",").map((c) => c.trim());
+        const employee = parts[0] ?? "";
+        const preset = parts[1] ?? "";
+        const store = parts[2] ?? "";
+        const endD = parts[parts.length - 1] ?? "";
+        const startD = parts[parts.length - 2] ?? "";
+        const weekdays = parts.slice(3, Math.max(3, parts.length - 2)).join(",");
         return { employee, preset, store, weekdays, start: startD, end: endD };
       });
     setBulkRows(rows);
