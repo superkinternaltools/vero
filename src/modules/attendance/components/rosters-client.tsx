@@ -429,24 +429,20 @@ export function RostersClient({
         </div>
       </div>
 
-      {/* Roster chips */}
-      <div className="mt-5 flex flex-wrap gap-2">
-        {rosters.map((r) => (
-          <button
-            key={r.id}
-            onClick={() => router.push(`/attendance/rosters?roster=${r.id}`)}
-            className={cn(
-              "rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors",
-              selectedRosterId === r.id
-                ? "border-foreground bg-foreground text-background"
-                : "border-border bg-card text-muted-foreground hover:border-muted-foreground hover:text-foreground",
-            )}
-          >
-            {r.name} <span className="opacity-60">· {r.memberCount}</span>
-          </button>
-        ))}
-        {rosters.length === 0 && !isNew && <p className="text-sm text-muted-foreground">No rosters yet — create your first.</p>}
-      </div>
+      {/* Roster picker */}
+      {rosters.length > 0 ? (
+        <div className="mt-5 w-full max-w-sm">
+          <SelectSearch
+            value={selectedRosterId !== "new" ? selectedRosterId : null}
+            onChange={(id) => router.push(id ? `/attendance/rosters?roster=${id}` : "/attendance/rosters")}
+            options={rosters.map((r) => ({ id: r.id, label: `${r.name} · ${r.memberCount}` }))}
+            placeholder="Pick a roster…"
+            searchPlaceholder="Search rosters…"
+          />
+        </div>
+      ) : (
+        !isNew && <p className="mt-5 text-sm text-muted-foreground">No rosters yet — create your first.</p>
+      )}
 
       {/* Creation form */}
       {isNew && (
