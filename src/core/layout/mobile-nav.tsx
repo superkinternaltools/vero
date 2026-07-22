@@ -19,6 +19,7 @@ import {
   Settings,
   CalendarClock,
   Camera,
+  GitCompare,
   LogOut,
 } from "lucide-react";
 import { signOutAction } from "@/modules/auth/actions";
@@ -43,6 +44,7 @@ const groups: Group[] = [
       { key: "summary", name: "Summary", href: "/summary", icon: Table2 },
       { key: "analysis", name: "Analysis", href: "/analysis", icon: BarChart3 },
       { key: "leaderboard", name: "Leaderboard", href: "/leaderboard", icon: Trophy },
+      { key: "contest_impact", name: "Contest Impact", href: "/contest-impact", icon: GitCompare },
     ],
   },
   {

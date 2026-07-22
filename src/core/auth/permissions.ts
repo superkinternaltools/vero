@@ -8,6 +8,7 @@ export const PERMISSION_KEYS = [
   { key: "summary", label: "Summary" },
   { key: "analysis", label: "Analysis" },
   { key: "leaderboard", label: "Leaderboard" },
+  { key: "contest_impact", label: "Contest Impact" },
   { key: "attendance", label: "Attendance" },
   { key: "stores", label: "Stores" },
   { key: "users", label: "Users" },
