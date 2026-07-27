@@ -41,3 +41,19 @@ export function normalizeHeader(h: string): string {
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
 }
+
+export function parseNumber(cell: string): number | null {
+  const cleaned = cell.replace(/,/g, "").trim();
+  if (!cleaned) return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+export function parseMonth(cell: string): string | null {
+  const c = cell.trim();
+  if (/^\d{4}-\d{2}$/.test(c)) return c;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(c)) return c.slice(0, 7);
+  const d = new Date(c);
+  if (!Number.isNaN(d.getTime())) return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  return null;
+}

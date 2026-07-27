@@ -1,5 +1,6 @@
 import { requireAccess } from "@/core/auth/access";
-import { listCampaignOptions, listImportedWeeks, getContestImpactReport } from "@/modules/contest-impact/queries";
+import { listCampaignOptions, listAvailableWeeks, getMonthlyOverview, getWeekReport } from "@/modules/contest-impact/queries";
+import { ensureDummyData } from "@/modules/contest-impact/seed";
 import { ContestImpactTabs } from "@/modules/contest-impact/components/contest-impact-tabs";
 import { ReportClient } from "@/modules/contest-impact/components/report-client";
 
@@ -9,32 +10,34 @@ export default async function ContestImpactPage({
   searchParams: Promise<{ campaign?: string; month?: string; week?: string }>;
 }) {
   await requireAccess("contest_impact");
+  await ensureDummyData();
   const sp = await searchParams;
 
   const campaigns = await listCampaignOptions();
-  const campaignId =
-    sp.campaign && campaigns.some((c) => c.id === sp.campaign) ? sp.campaign : (campaigns[0]?.id ?? null);
+  const campaignKey = sp.campaign && campaigns.some((c) => c.key === sp.campaign) ? sp.campaign : (campaigns[0]?.key ?? null);
 
-  const weeks = campaignId ? await listImportedWeeks(campaignId) : [];
+  const weeksAvail = campaignKey ? await listAvailableWeeks(campaignKey) : [];
+  const months = [...new Set(weeksAvail.map((w) => w.month))].sort((a, b) => (a < b ? 1 : -1));
+  const month = sp.month && months.includes(sp.month) ? sp.month : (months[0] ?? null);
 
-  const requestedMonth = sp.month ?? null;
   const requestedWeek = sp.week ? Number(sp.week) : null;
-  const requestedIsValid = weeks.some((w) => w.month === requestedMonth && w.weekOfMonth === requestedWeek);
-  const month = requestedIsValid ? requestedMonth : (weeks[0]?.month ?? null);
-  const weekOfMonth = requestedIsValid ? requestedWeek : (weeks[0]?.weekOfMonth ?? null);
+  const weekValid = !!requestedWeek && weeksAvail.some((w) => w.month === month && w.week === requestedWeek);
+  const week = weekValid ? requestedWeek : null;
 
-  const report = campaignId && month && weekOfMonth ? await getContestImpactReport(campaignId, month, weekOfMonth) : null;
+  const overview = campaignKey && month ? await getMonthlyOverview(campaignKey, month) : null;
+  const weekReport = campaignKey && month && week ? await getWeekReport(campaignKey, month, week) : null;
 
   return (
     <div>
       <ContestImpactTabs />
       <ReportClient
         campaigns={campaigns}
-        weeks={weeks}
-        selectedCampaignId={campaignId}
-        selectedMonth={month}
-        selectedWeek={weekOfMonth}
-        report={report}
+        months={months}
+        campaignKey={campaignKey}
+        month={month}
+        week={week}
+        overview={overview}
+        weekReport={weekReport}
       />
     </div>
   );

@@ -1,12 +1,14 @@
 import { createClient } from "@/core/db/server";
-import { createAdminClient } from "@/core/db/admin";
+import { GROUP_ORDER, APPROVED_STATUSES } from "./types";
 import type {
   NameOption,
-  WeekOption,
-  ContestImpactReport,
+  CampaignOption,
   GroupKey,
   GroupSummary,
   StoreDetailRow,
+  WeekReport,
+  WeekTrendPoint,
+  MonthlyOverview,
 } from "./types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -15,86 +17,56 @@ export function normalizeName(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-export async function listCampaignOptions(): Promise<NameOption[]> {
-  const supabase = await createClient();
-  const { data } = await supabase
-    .from("campaigns")
-    .select("id, name")
-    .is("deleted_at", null)
-    .order("name", { ascending: true });
-  return ((data as any[]) ?? []).map((c) => ({ id: c.id, label: c.name }));
-}
-
 export async function listStoreOptions(): Promise<NameOption[]> {
   const supabase = await createClient();
-  const { data } = await supabase
-    .from("stores")
-    .select("id, name")
-    .is("deleted_at", null)
-    .order("name", { ascending: true });
+  const { data } = await supabase.from("stores").select("id, name").is("deleted_at", null).order("name", { ascending: true });
   return ((data as any[]) ?? []).map((s) => ({ id: s.id, label: s.name }));
 }
 
-/** Builds normalized-name → id maps from live records plus every saved alias. */
-export async function buildNameResolvers(): Promise<{
-  byCampaignName: Map<string, string>;
-  byStoreName: Map<string, string>;
-}> {
+export async function buildStoreResolver(): Promise<Map<string, string>> {
   const supabase = await createClient();
-  const [{ data: campaigns }, { data: stores }, { data: campaignAliases }, { data: storeAliases }] =
-    await Promise.all([
-      supabase.from("campaigns").select("id, name").is("deleted_at", null),
-      supabase.from("stores").select("id, name").is("deleted_at", null),
-      supabase.from("campaign_name_aliases").select("raw_name, campaign_id"),
-      supabase.from("store_name_aliases").select("raw_name, store_id"),
-    ]);
-
-  const byCampaignName = new Map<string, string>();
-  for (const c of (campaigns as any[]) ?? []) byCampaignName.set(normalizeName(c.name), c.id);
-  for (const a of (campaignAliases as any[]) ?? []) byCampaignName.set(normalizeName(a.raw_name), a.campaign_id);
-
-  const byStoreName = new Map<string, string>();
-  for (const s of (stores as any[]) ?? []) byStoreName.set(normalizeName(s.name), s.id);
-  for (const a of (storeAliases as any[]) ?? []) byStoreName.set(normalizeName(a.raw_name), a.store_id);
-
-  return { byCampaignName, byStoreName };
+  const [{ data: stores }, { data: aliases }] = await Promise.all([
+    supabase.from("stores").select("id, name").is("deleted_at", null),
+    supabase.from("store_name_aliases").select("raw_name, store_id"),
+  ]);
+  const byName = new Map<string, string>();
+  for (const s of (stores as any[]) ?? []) byName.set(normalizeName(s.name), s.id);
+  for (const a of (aliases as any[]) ?? []) byName.set(normalizeName(a.raw_name), a.store_id);
+  return byName;
 }
 
-/** Day-of-month chunking: week 1 = days 1–7 … week 5 = day 29–end of month. */
-export function getWeekRange(month: string, weekOfMonth: number): { start: string; end: string } {
-  const [y, m] = month.split("-").map(Number);
-  const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
-  const startDay = (weekOfMonth - 1) * 7 + 1;
-  const endDay = Math.min(startDay + 6, daysInMonth);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return {
-    start: `${month}-${pad(startDay)}`,
-    end: `${month}-${pad(endDay)}`,
-  };
-}
-
-export async function listImportedWeeks(campaignId: string): Promise<WeekOption[]> {
+export async function listCampaignOptions(): Promise<CampaignOption[]> {
   const supabase = await createClient();
-  const { data } = await supabase
-    .from("store_weekly_performance")
-    .select("month, week_of_month")
-    .eq("campaign_id", campaignId);
-
-  const seen = new Set<string>();
-  const weeks: WeekOption[] = [];
+  const { data } = await supabase.from("contest_campaign_rows").select("raw_campaign_name");
+  const seen = new Map<string, string>();
   for (const r of (data as any[]) ?? []) {
-    const month = (r.month as string).slice(0, 7);
-    const key = `${month}-${r.week_of_month}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const label = new Date(`${month}-01T00:00:00Z`).toLocaleDateString("en-IN", {
-      month: "long",
-      year: "numeric",
-      timeZone: "UTC",
-    });
-    weeks.push({ month, weekOfMonth: r.week_of_month, label: `${label} · Week ${r.week_of_month}` });
+    const key = normalizeName(r.raw_campaign_name);
+    if (!seen.has(key)) seen.set(key, r.raw_campaign_name.trim());
   }
-  return weeks.sort((a, b) => (a.month + a.weekOfMonth < b.month + b.weekOfMonth ? 1 : -1));
+  return [...seen.entries()]
+    .map(([key, label]) => ({ key, label }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+export async function listAvailableWeeks(campaignKey: string): Promise<{ month: string; week: number }[]> {
+  const supabase = await createClient();
+  const [{ data: c }, { data: i }, { data: s }] = await Promise.all([
+    supabase.from("contest_campaign_rows").select("month, week, raw_campaign_name"),
+    supabase.from("contest_inventory_rows").select("month, week, raw_campaign_name"),
+    supabase.from("contest_sell_side_rows").select("month, week, raw_campaign_name"),
+  ]);
+  const all = [...((c as any[]) ?? []), ...((i as any[]) ?? []), ...((s as any[]) ?? [])];
+  const seen = new Set<string>();
+  const out: { month: string; week: number }[] = [];
+  for (const r of all) {
+    if (normalizeName(r.raw_campaign_name) !== campaignKey) continue;
+    const month = (r.month as string).slice(0, 7);
+    const k = `${month}-${r.week}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push({ month, week: r.week });
+  }
+  return out.sort((a, b) => (a.month + a.week < b.month + b.week ? 1 : -1));
 }
 
 function median(values: number[]): number | null {
@@ -109,112 +81,228 @@ function growthPct(curr: number | null, prev: number | null): number | null {
   return ((curr - prev) / Math.abs(prev)) * 100;
 }
 
-const TASK_STATUS_LABEL: Record<string, string> = {
-  approved: "Approved",
-  rejected: "Rejected",
-  missed: "Missed",
-  not_done: "Not done",
-  submitted: "Not reviewed",
-  pending: "No submission",
+function pctRatio(numer: number, denom: number): number | null {
+  if (denom === 0) return null;
+  return (numer / denom) * 100;
+}
+
+type StoreBundle = {
+  storeId: string;
+  storeName: string;
+  status: string | null;
+  gmv: number | null;
+  lastMonthGmv: number | null;
+  lastYearGmv: number | null;
+  penetration: number | null;
+  lastMonthPenetration: number | null;
+  lastYearPenetration: number | null;
+  avgUnit: number | null;
+  lastMonthAvgUnit: number | null;
+  lastYearAvgUnit: number | null;
+  categoryContribution: number | null;
+  lastMonthCategoryContribution: number | null;
+  lastYearCategoryContribution: number | null;
+  storeStockFillRate: number | null;
+  storeSkuOnTargetPct: number | null;
+  warehouseStockFillRate: number | null;
+  warehouseSkuOnTargetPct: number | null;
 };
 
-export async function getContestImpactReport(
-  campaignId: string,
-  month: string,
-  weekOfMonth: number,
-): Promise<ContestImpactReport> {
+async function buildStoreBundles(campaignKey: string, month: string, week: number): Promise<StoreBundle[]> {
   const supabase = await createClient();
-  const admin = createAdminClient();
-  const { start, end } = getWeekRange(month, weekOfMonth);
-  const weekClosed = end < new Date().toISOString().slice(0, 10);
+  const monthDate = `${month}-01`;
 
-  const { data: perfRows } = await supabase
-    .from("store_weekly_performance")
-    .select(
-      `
-      store_id, stores ( name ),
-      this_month_gmv, last_month_gmv, last_year_gmv,
-      this_month_penetration, last_month_penetration, last_year_penetration,
-      this_month_avg_unit, last_month_avg_unit, last_year_avg_unit,
-      this_month_category_contribution, last_month_category_contribution, last_year_category_contribution
-      `,
-    )
-    .eq("campaign_id", campaignId)
-    .eq("month", `${month}-01`)
-    .eq("week_of_month", weekOfMonth)
-    .not("store_id", "is", null);
+  const [{ data: campaignRows }, { data: inventoryRows }, { data: sellRows }] = await Promise.all([
+    supabase
+      .from("contest_campaign_rows")
+      .select("raw_campaign_name, store_id, status, stores ( name )")
+      .eq("month", monthDate)
+      .eq("week", week),
+    supabase
+      .from("contest_inventory_rows")
+      .select(
+        "raw_campaign_name, store_id, target_store_stock, in_store_stock, target_warehouse_stock, in_warehouse_stock, stores ( name )",
+      )
+      .eq("month", monthDate)
+      .eq("week", week),
+    supabase
+      .from("contest_sell_side_rows")
+      .select(
+        `
+        raw_campaign_name, store_id, stores ( name ),
+        this_month_gmv, last_month_gmv, last_year_gmv,
+        this_month_penetration, last_month_penetration, last_year_penetration,
+        this_month_avg_unit, last_month_avg_unit, last_year_avg_unit,
+        this_month_category_contribution, last_month_category_contribution, last_year_category_contribution
+        `,
+      )
+      .eq("month", monthDate)
+      .eq("week", week),
+  ]);
 
-  const { data: taskRows } = await admin
-    .from("tasks")
-    .select("store_id, status, cycle_start, cycle_end")
-    .eq("campaign_id", campaignId)
-    .lte("cycle_start", end)
-    .gte("cycle_end", start);
+  const matchesCampaign = (name: string) => normalizeName(name) === campaignKey;
 
-  const tasksByStore = new Map<string, { status: string }[]>();
-  for (const t of (taskRows as any[]) ?? []) {
-    const list = tasksByStore.get(t.store_id) ?? [];
-    list.push({ status: t.status });
-    tasksByStore.set(t.store_id, list);
+  const statusByStore = new Map<string, { status: string; storeName: string }>();
+  for (const r of (campaignRows as any[]) ?? []) {
+    if (!r.store_id || !matchesCampaign(r.raw_campaign_name)) continue;
+    statusByStore.set(r.store_id, { status: r.status, storeName: r.stores?.name ?? "Unknown store" });
   }
 
-  const buckets: Record<GroupKey, any[]> = { approved: [], configured_not_approved: [], not_configured: [] };
-  const detail: Record<GroupKey, StoreDetailRow[]> = { approved: [], configured_not_approved: [], not_configured: [] };
-  let excludedPendingCount = 0;
+  const invByStore = new Map<string, { skus: any[]; storeName: string }>();
+  for (const r of (inventoryRows as any[]) ?? []) {
+    if (!r.store_id || !matchesCampaign(r.raw_campaign_name)) continue;
+    const entry = invByStore.get(r.store_id) ?? { skus: [] as any[], storeName: r.stores?.name ?? "Unknown store" };
+    entry.skus.push(r);
+    invByStore.set(r.store_id, entry);
+  }
 
-  for (const r of (perfRows as any[]) ?? []) {
-    const storeId = r.store_id as string;
-    const storeName = r.stores?.name ?? "Unknown store";
-    const tasksForStore = tasksByStore.get(storeId) ?? [];
-    const approvedTask = tasksForStore.find((t) => t.status === "approved");
-    const anyTask = tasksForStore[0];
+  const sellByStore = new Map<string, any>();
+  for (const r of (sellRows as any[]) ?? []) {
+    if (!r.store_id || !matchesCampaign(r.raw_campaign_name)) continue;
+    sellByStore.set(r.store_id, r);
+  }
 
-    let group: GroupKey;
-    if (approvedTask) {
-      group = "approved";
-    } else if (anyTask && weekClosed) {
-      group = "configured_not_approved";
-    } else if (anyTask && !weekClosed) {
-      excludedPendingCount += 1;
-      continue;
-    } else {
-      group = "not_configured";
+  const storeIds = new Set<string>([...statusByStore.keys(), ...invByStore.keys(), ...sellByStore.keys()]);
+  const bundles: StoreBundle[] = [];
+
+  for (const storeId of storeIds) {
+    const statusEntry = statusByStore.get(storeId);
+    const invEntry = invByStore.get(storeId);
+    const sell = sellByStore.get(storeId);
+
+    let storeStockFillRate: number | null = null;
+    let storeSkuOnTargetPct: number | null = null;
+    let warehouseStockFillRate: number | null = null;
+    let warehouseSkuOnTargetPct: number | null = null;
+    if (invEntry) {
+      let sumInStore = 0, sumTargetStore = 0, storeHits = 0, storeCounted = 0;
+      let sumInWh = 0, sumTargetWh = 0, whHits = 0, whCounted = 0;
+      for (const sku of invEntry.skus) {
+        if (sku.in_store_stock != null && sku.target_store_stock != null) {
+          sumInStore += sku.in_store_stock;
+          sumTargetStore += sku.target_store_stock;
+          storeCounted += 1;
+          if (sku.in_store_stock >= sku.target_store_stock) storeHits += 1;
+        }
+        if (sku.in_warehouse_stock != null && sku.target_warehouse_stock != null) {
+          sumInWh += sku.in_warehouse_stock;
+          sumTargetWh += sku.target_warehouse_stock;
+          whCounted += 1;
+          if (sku.in_warehouse_stock >= sku.target_warehouse_stock) whHits += 1;
+        }
+      }
+      storeStockFillRate = pctRatio(sumInStore, sumTargetStore);
+      storeSkuOnTargetPct = storeCounted ? pctRatio(storeHits, storeCounted) : null;
+      warehouseStockFillRate = pctRatio(sumInWh, sumTargetWh);
+      warehouseSkuOnTargetPct = whCounted ? pctRatio(whHits, whCounted) : null;
     }
 
-    buckets[group].push(r);
-    const verdictLabel = approvedTask
-      ? "Approved"
-      : anyTask
-        ? (TASK_STATUS_LABEL[anyTask.status] ?? anyTask.status)
-        : "No contest";
-    detail[group].push({
+    bundles.push({
       storeId,
-      storeName,
-      gmv: r.this_month_gmv,
-      gmvVsLastMonth: growthPct(r.this_month_gmv, r.last_month_gmv),
-      gmvVsLastYear: growthPct(r.this_month_gmv, r.last_year_gmv),
-      penetration: r.this_month_penetration,
-      verdictLabel,
+      storeName: statusEntry?.storeName ?? invEntry?.storeName ?? sell?.stores?.name ?? "Unknown store",
+      status: statusEntry?.status ?? null,
+      gmv: sell?.this_month_gmv ?? null,
+      lastMonthGmv: sell?.last_month_gmv ?? null,
+      lastYearGmv: sell?.last_year_gmv ?? null,
+      penetration: sell?.this_month_penetration ?? null,
+      lastMonthPenetration: sell?.last_month_penetration ?? null,
+      lastYearPenetration: sell?.last_year_penetration ?? null,
+      avgUnit: sell?.this_month_avg_unit ?? null,
+      lastMonthAvgUnit: sell?.last_month_avg_unit ?? null,
+      lastYearAvgUnit: sell?.last_year_avg_unit ?? null,
+      categoryContribution: sell?.this_month_category_contribution ?? null,
+      lastMonthCategoryContribution: sell?.last_month_category_contribution ?? null,
+      lastYearCategoryContribution: sell?.last_year_category_contribution ?? null,
+      storeStockFillRate,
+      storeSkuOnTargetPct,
+      warehouseStockFillRate,
+      warehouseSkuOnTargetPct,
     });
   }
 
-  const groups: GroupSummary[] = (["approved", "configured_not_approved", "not_configured"] as GroupKey[]).map(
-    (key) => {
-      const rows = buckets[key];
-      return {
-        key,
-        count: rows.length,
-        medianGmvVsLastMonth: median(rows.map((r) => growthPct(r.this_month_gmv, r.last_month_gmv)).filter((v): v is number => v != null)),
-        medianGmvVsLastYear: median(rows.map((r) => growthPct(r.this_month_gmv, r.last_year_gmv)).filter((v): v is number => v != null)),
-        medianPenetrationVsLastMonth: median(rows.map((r) => growthPct(r.this_month_penetration, r.last_month_penetration)).filter((v): v is number => v != null)),
-        medianPenetrationVsLastYear: median(rows.map((r) => growthPct(r.this_month_penetration, r.last_year_penetration)).filter((v): v is number => v != null)),
-        medianAvgUnitVsLastMonth: median(rows.map((r) => growthPct(r.this_month_avg_unit, r.last_month_avg_unit)).filter((v): v is number => v != null)),
-        medianAvgUnitVsLastYear: median(rows.map((r) => growthPct(r.this_month_avg_unit, r.last_year_avg_unit)).filter((v): v is number => v != null)),
-        medianCategoryContributionVsLastMonth: median(rows.map((r) => growthPct(r.this_month_category_contribution, r.last_month_category_contribution)).filter((v): v is number => v != null)),
-        medianCategoryContributionVsLastYear: median(rows.map((r) => growthPct(r.this_month_category_contribution, r.last_year_category_contribution)).filter((v): v is number => v != null)),
-      };
-    },
-  );
+  return bundles;
+}
 
-  return { groups, detail, excludedPendingCount };
+function classify(bundle: StoreBundle): GroupKey {
+  if (!bundle.status) return "not_configured";
+  return APPROVED_STATUSES.has(normalizeName(bundle.status)) ? "approved" : "configured_not_approved";
+}
+
+export async function getWeekReport(campaignKey: string, month: string, week: number): Promise<WeekReport> {
+  const bundles = await buildStoreBundles(campaignKey, month, week);
+
+  const buckets: Record<GroupKey, StoreBundle[]> = { approved: [], configured_not_approved: [], not_configured: [] };
+  const detail: Record<GroupKey, StoreDetailRow[]> = { approved: [], configured_not_approved: [], not_configured: [] };
+
+  for (const b of bundles) {
+    const group = classify(b);
+    buckets[group].push(b);
+    detail[group].push({
+      storeId: b.storeId,
+      storeName: b.storeName,
+      status: b.status,
+      gmv: b.gmv,
+      gmvVsLastMonth: growthPct(b.gmv, b.lastMonthGmv),
+      gmvVsLastYear: growthPct(b.gmv, b.lastYearGmv),
+      storeStockFillRate: b.storeStockFillRate,
+      warehouseStockFillRate: b.warehouseStockFillRate,
+    });
+  }
+
+  const groups: GroupSummary[] = GROUP_ORDER.map((key) => {
+    const rows = buckets[key];
+    const num = (fn: (b: StoreBundle) => number | null) =>
+      median(rows.map(fn).filter((v): v is number => v != null));
+    return {
+      key,
+      count: rows.length,
+      metrics: {
+        gmvVsLastMonth: num((b) => growthPct(b.gmv, b.lastMonthGmv)),
+        gmvVsLastYear: num((b) => growthPct(b.gmv, b.lastYearGmv)),
+        penetrationVsLastMonth: num((b) => growthPct(b.penetration, b.lastMonthPenetration)),
+        penetrationVsLastYear: num((b) => growthPct(b.penetration, b.lastYearPenetration)),
+        avgUnitVsLastMonth: num((b) => growthPct(b.avgUnit, b.lastMonthAvgUnit)),
+        avgUnitVsLastYear: num((b) => growthPct(b.avgUnit, b.lastYearAvgUnit)),
+        categoryContributionVsLastMonth: num((b) => growthPct(b.categoryContribution, b.lastMonthCategoryContribution)),
+        categoryContributionVsLastYear: num((b) => growthPct(b.categoryContribution, b.lastYearCategoryContribution)),
+        storeStockFillRate: num((b) => b.storeStockFillRate),
+        storeSkuOnTargetPct: num((b) => b.storeSkuOnTargetPct),
+        warehouseStockFillRate: num((b) => b.warehouseStockFillRate),
+        warehouseSkuOnTargetPct: num((b) => b.warehouseSkuOnTargetPct),
+      },
+    };
+  });
+
+  return { groups, detail };
+}
+
+export async function getMonthlyOverview(campaignKey: string, month: string): Promise<MonthlyOverview> {
+  const allWeeks = await listAvailableWeeks(campaignKey);
+  const weeksThisMonth = allWeeks.filter((w) => w.month === month).map((w) => w.week).sort((a, b) => a - b);
+
+  const weeks: WeekTrendPoint[] = [];
+  for (const week of weeksThisMonth) {
+    const { groups } = await getWeekReport(campaignKey, month, week);
+    const counts = {} as Record<GroupKey, number>;
+    const byGroup = {} as WeekTrendPoint["byGroup"];
+    for (const g of groups) {
+      counts[g.key] = g.count;
+      byGroup[g.key] = {
+        gmvVsLastMonth: g.metrics.gmvVsLastMonth,
+        penetrationVsLastMonth: g.metrics.penetrationVsLastMonth,
+        avgUnitVsLastMonth: g.metrics.avgUnitVsLastMonth,
+        categoryContributionVsLastMonth: g.metrics.categoryContributionVsLastMonth,
+        storeStockFillRate: g.metrics.storeStockFillRate,
+        warehouseStockFillRate: g.metrics.warehouseStockFillRate,
+      };
+    }
+    weeks.push({ week, counts, byGroup });
+  }
+  return { weeks };
+}
+
+export async function hasAnyContestData(): Promise<boolean> {
+  const supabase = await createClient();
+  const { count } = await supabase.from("contest_data_batches").select("id", { count: "exact", head: true });
+  return (count ?? 0) > 0;
 }

@@ -7,7 +7,6 @@ import { cn } from "@/core/lib/utils";
 const TABS = [
   { href: "/contest-impact", label: "Report" },
   { href: "/contest-impact/import", label: "Import data" },
-  { href: "/contest-impact/historical", label: "Historical backfill" },
 ];
 
 export function ContestImpactTabs() {
@@ -23,9 +22,7 @@ export function ContestImpactTabs() {
             href={t.href}
             className={cn(
               "rounded-lg px-4 py-1.5 text-sm font-medium transition-colors",
-              active
-                ? "bg-card text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground",
+              active ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
             )}
           >
             {t.label}
