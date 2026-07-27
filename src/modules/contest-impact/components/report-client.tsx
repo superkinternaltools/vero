@@ -42,13 +42,20 @@ const GROUP_HINT: Record<GroupKey, string> = {
   configured_not_approved: "Status = Rejected or Pending",
   not_configured: "No row in Campaign Data this week",
 };
+const GROUP_SHORT: Record<GroupKey, string> = {
+  approved: "Approved",
+  configured_not_approved: "Not approved",
+  not_configured: "No contest",
+};
 
 function fmtPct(v: number | null): string {
   if (v == null) return "—";
-  return `${v > 0 ? "+" : ""}${v.toFixed(0)}%`;
+  const rounded = Math.round(v);
+  if (rounded === 0) return "0%";
+  return `${rounded > 0 ? "+" : ""}${rounded}%`;
 }
 function fmtLevel(v: number | null): string {
-  return v == null ? "—" : `${v.toFixed(0)}%`;
+  return v == null ? "—" : `${Math.round(v)}%`;
 }
 function pctColor(v: number | null): string {
   if (v == null) return "text-muted-foreground";
@@ -61,29 +68,34 @@ function barWidth(v: number | null, maxAbs: number): number {
 
 function MetricRow({ lm, ly, maxAbs }: { lm: number | null; ly: number | null; maxAbs: number }) {
   return (
-    <div>
+    <div className="space-y-1.5">
       {[{ v: lm, tag: "LM", faded: false }, { v: ly, tag: "LY", faded: true }].map(({ v, tag, faded }) => (
-        <div key={tag} className="flex items-center gap-2 py-0.5">
-          <span className={cn("w-11 shrink-0 text-xs font-semibold tabular-nums", pctColor(v))}>{fmtPct(v)}</span>
-          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+        <div key={tag} className="flex items-center gap-2.5">
+          <span className={cn("w-12 shrink-0 text-sm font-bold tabular-nums", pctColor(v))}>{fmtPct(v)}</span>
+          <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-muted">
             <div
-              className={cn("h-full rounded-full", v != null && v < 0 ? "bg-danger" : "bg-success", faded && "opacity-50")}
+              className={cn("h-full rounded-full", v != null && v < 0 ? "bg-danger" : "bg-success", faded && "opacity-45")}
               style={{ width: `${barWidth(v, maxAbs)}%` }}
             />
           </div>
-          <span className="w-6 shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">{tag}</span>
+          <span className="w-6 shrink-0 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{tag}</span>
         </div>
       ))}
     </div>
   );
 }
 
+/** Scaled to 120% so an over-target fill rate still reads clearly against the 100% marker. */
 function LevelBar({ value, color }: { value: number | null; color: string }) {
+  const displayMax = 120;
+  const widthPct = value == null ? 0 : Math.min(100, (Math.max(0, value) / displayMax) * 100);
+  const targetLeft = (100 / displayMax) * 100;
   return (
-    <div className="flex items-center gap-2">
-      <span className={cn("w-10 shrink-0 text-xs font-semibold tabular-nums", color)}>{fmtLevel(value)}</span>
-      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-        <div className={cn("h-full rounded-full", color.replace("text-", "bg-"))} style={{ width: `${Math.min(100, Math.max(0, value ?? 0))}%` }} />
+    <div className="flex items-center gap-2.5">
+      <span className={cn("w-11 shrink-0 text-sm font-bold tabular-nums", color)}>{fmtLevel(value)}</span>
+      <div className="relative h-2.5 flex-1 overflow-hidden rounded-full bg-muted">
+        <div className={cn("h-full rounded-full", color.replace("text-", "bg-"))} style={{ width: `${widthPct}%` }} />
+        <div className="absolute top-0 h-full w-px bg-foreground/25" style={{ left: `${targetLeft}%` }} />
       </div>
     </div>
   );
@@ -367,7 +379,7 @@ export function ReportClient({
           <div className="mt-4 rounded-2xl border border-border bg-card p-5">
             <h3 className="text-sm font-semibold text-foreground">Sell-through impact</h3>
             <p className="mb-4 mt-1 text-xs text-muted-foreground">Median % change vs last month / last year, by group.</p>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
               {SELL_METRICS.map((metric) => {
                 const maxAbs = Math.max(
                   ...weekReport.groups
@@ -377,18 +389,18 @@ export function ReportClient({
                   1,
                 );
                 return (
-                  <div
-                    key={metric.key}
-                    className="rounded-xl border border-border bg-card p-3 sm:col-span-1 sm:row-span-1"
-                    style={{ gridColumn: metric.key === "gmv" ? "1 / -1" : undefined }}
-                  >
-                    <p className="mb-2 text-xs font-semibold text-foreground">{metric.label}</p>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div key={metric.key} className="rounded-xl border border-border bg-background p-4">
+                    <p className="mb-3 text-xs font-bold uppercase tracking-wide text-muted-foreground">{metric.label}</p>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                       {GROUP_ORDER.map((key) => {
                         const g = weekReport.groups.find((x) => x.key === key)!;
+                        const style = GROUP_STYLE[key];
                         return (
                           <div key={key}>
-                            <p className="mb-1 text-[11px] text-muted-foreground">{GROUP_LABELS[key]}</p>
+                            <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                              <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", style.dot)} />
+                              {GROUP_SHORT[key]}
+                            </p>
                             <MetricRow lm={g.metrics[metric.lm]} ly={g.metrics[metric.ly]} maxAbs={maxAbs} />
                           </div>
                         );
@@ -403,21 +415,24 @@ export function ReportClient({
           <div className="mt-4 rounded-2xl border border-border bg-card p-5">
             <h3 className="text-sm font-semibold text-foreground">Inventory compliance</h3>
             <p className="mb-4 mt-1 text-xs text-muted-foreground">
-              Median per group. Weighted fill rate = stock on hand ÷ target across every SKU. SKUs on target = share of SKUs individually hitting target.
+              Median per group. Weighted fill rate = stock on hand ÷ target across every SKU (the faint tick marks 100%). SKUs on target = share of SKUs individually hitting target.
             </p>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
               {GROUP_ORDER.map((key) => {
                 const g = weekReport.groups.find((x) => x.key === key)!;
                 const style = GROUP_STYLE[key];
                 return (
-                  <div key={key} className="rounded-xl border border-border bg-card p-3">
-                    <p className="mb-2 text-xs font-semibold text-foreground">{GROUP_LABELS[key]}</p>
-                    <p className="mb-1 text-[11px] font-semibold text-muted-foreground">Store stock</p>
-                    <div className="mb-1"><LevelBar value={g.metrics.storeStockFillRate} color={style.text} /></div>
-                    <p className="mb-3 text-[10px] text-muted-foreground">weighted fill · {fmtLevel(g.metrics.storeSkuOnTargetPct)} SKUs on target</p>
-                    <p className="mb-1 text-[11px] font-semibold text-muted-foreground">Warehouse stock</p>
-                    <div className="mb-1"><LevelBar value={g.metrics.warehouseStockFillRate} color={style.text} /></div>
-                    <p className="text-[10px] text-muted-foreground">weighted fill · {fmtLevel(g.metrics.warehouseSkuOnTargetPct)} SKUs on target</p>
+                  <div key={key} className="rounded-xl border border-border bg-background p-4">
+                    <p className="mb-3 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-muted-foreground">
+                      <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", style.dot)} />
+                      {GROUP_SHORT[key]}
+                    </p>
+                    <p className="mb-1.5 text-xs font-semibold text-foreground">Store stock</p>
+                    <LevelBar value={g.metrics.storeStockFillRate} color={style.text} />
+                    <p className="mb-4 mt-1 text-[11px] text-muted-foreground">{fmtLevel(g.metrics.storeSkuOnTargetPct)} of SKUs on target</p>
+                    <p className="mb-1.5 text-xs font-semibold text-foreground">Warehouse stock</p>
+                    <LevelBar value={g.metrics.warehouseStockFillRate} color={style.text} />
+                    <p className="mt-1 text-[11px] text-muted-foreground">{fmtLevel(g.metrics.warehouseSkuOnTargetPct)} of SKUs on target</p>
                   </div>
                 );
               })}
