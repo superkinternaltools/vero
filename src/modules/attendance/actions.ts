@@ -235,10 +235,12 @@ export async function applyWeek(input: {
 }
 
 /** Copies every assignment from one week onto another (7 days, same weekday
- * offset). Overwrites whatever's already in the target week. Skips any
- * resulting date outside the roster's own date range or on a holiday. */
-export async function copyWeek(
+ * offset), for one person only. Overwrites whatever's already in the target
+ * week. Skips any resulting date outside the roster's own date range or on a
+ * holiday, and says so instead of silently copying nothing. */
+export async function copyWeekForUser(
   rosterId: string,
+  userId: string,
   fromWeekStart: string,
   toWeekStart: string,
 ): Promise<Result & { copied?: number }> {
@@ -255,31 +257,36 @@ export async function copyWeek(
   const fromDays = Array.from({ length: 7 }, (_, i) => addDaysISO(fromWeekStart, i));
   const { data: assigns } = await supabase
     .from("attendance_assignments")
-    .select("user_id, work_date, preset_id, mode, windows, store_id")
+    .select("work_date, preset_id, mode, windows, store_id")
     .eq("roster_id", rosterId)
+    .eq("user_id", userId)
     .in("work_date", fromDays);
 
-  if (!assigns || assigns.length === 0) return { copied: 0 };
+  if (!assigns || assigns.length === 0)
+    return { error: "Nothing to copy — this person has no shifts that week." };
 
   const holidays = new Set((roster as any).holiday_dates ?? []);
+  const rStart = (roster as any).start_date as string;
+  const rEnd = (roster as any).end_date as string;
   const rows = (assigns as any[])
     .map((a) => {
       const offset = fromDays.indexOf(a.work_date);
       return { ...a, work_date: addDaysISO(toWeekStart, offset) };
     })
-    .filter(
-      (a) =>
-        a.work_date >= (roster as any).start_date &&
-        a.work_date <= (roster as any).end_date &&
-        !holidays.has(a.work_date),
-    );
+    .filter((a) => a.work_date >= rStart && a.work_date <= rEnd && !holidays.has(a.work_date));
 
-  if (rows.length === 0) return { copied: 0 };
+  if (rows.length === 0) {
+    const toWeekEnd = addDaysISO(toWeekStart, 6);
+    if (toWeekStart > rEnd || toWeekEnd < rStart) {
+      return { error: `Outside this roster's date range (${rStart} to ${rEnd}).` };
+    }
+    return { error: "Every day that week is a holiday for this roster." };
+  }
 
   const { error } = await supabase.from("attendance_assignments").upsert(
     rows.map((a) => ({
       roster_id: rosterId,
-      user_id: a.user_id,
+      user_id: userId,
       work_date: a.work_date,
       preset_id: a.preset_id,
       mode: a.mode,
@@ -292,6 +299,29 @@ export async function copyWeek(
 
   revalidatePath("/attendance/rosters");
   return { copied: rows.length };
+}
+
+/** Deletes every shift for one person, for one week — used by "Clear week". */
+export async function clearWeek(
+  rosterId: string,
+  userId: string,
+  weekStart: string,
+): Promise<Result & { cleared?: number }> {
+  if (!(await requireAdmin())) return { error: "Not authorized." };
+  const supabase = await createClient();
+
+  const days = Array.from({ length: 7 }, (_, i) => addDaysISO(weekStart, i));
+  const { data, error } = await supabase
+    .from("attendance_assignments")
+    .delete()
+    .eq("roster_id", rosterId)
+    .eq("user_id", userId)
+    .in("work_date", days)
+    .select("id");
+  if (error) return { error: error.message };
+
+  revalidatePath("/attendance/rosters");
+  return { cleared: (data ?? []).length };
 }
 
 /** Removes a single shift (one store visit that day) — a day may still have

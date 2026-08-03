@@ -20,7 +20,8 @@ import {
   upsertAssignment,
   clearAssignment,
   applyWeek,
-  copyWeek,
+  copyWeekForUser,
+  clearWeek,
   savePreset,
   deletePreset,
   validateBulk,
@@ -258,12 +259,43 @@ export function RostersClient({
       router.refresh();
     });
   }
-  function copyToNextWeek(weekStartDate: string) {
+  function copyToNextWeek(userId: string, weekStartDate: string) {
     if (!grid) return;
     const nextWeek = addDaysISO(weekStartDate, 7);
     if (!window.confirm(`Copy the week of ${fmtDay(weekStartDate)} onto the week of ${fmtDay(nextWeek)}? This overwrites anything already set for that week.`)) return;
     start(async () => {
-      const res = await copyWeek(grid.roster.id, weekStartDate, nextWeek);
+      const res = await copyWeekForUser(grid.roster.id, userId, weekStartDate, nextWeek);
+      if (res.error) { window.alert(res.error); return; }
+      router.refresh();
+    });
+  }
+  function copyToWholeMonth(userId: string, weekStartDate: string) {
+    if (!grid) return;
+    const targets = grid.weekStarts.filter((w) => w !== weekStartDate);
+    if (!targets.length) return;
+    if (
+      !window.confirm(
+        `Copy the week of ${fmtDay(weekStartDate)} onto every other week shown this month (${targets.length} week${targets.length === 1 ? "" : "s"})? This overwrites anything already set for those weeks.`,
+      )
+    )
+      return;
+    start(async () => {
+      let copied = 0;
+      const skipped: string[] = [];
+      for (const target of targets) {
+        const res = await copyWeekForUser(grid.roster.id, userId, weekStartDate, target);
+        if (res.error) skipped.push(`Week of ${fmtDay(target)}: ${res.error}`);
+        else copied += res.copied ?? 0;
+      }
+      if (skipped.length) window.alert(`Copied ${copied} shift(s). Skipped —\n${skipped.join("\n")}`);
+      router.refresh();
+    });
+  }
+  function clearWeekFor(userId: string, weekStartDate: string) {
+    if (!grid) return;
+    if (!window.confirm(`Clear every shift this person has the week of ${fmtDay(weekStartDate)}? This can't be undone.`)) return;
+    start(async () => {
+      const res = await clearWeek(grid.roster.id, userId, weekStartDate);
       if (res.error) { window.alert(res.error); return; }
       router.refresh();
     });
@@ -597,7 +629,9 @@ export function RostersClient({
                                 <div className="w-36"><SelectSearch value={weekPreset[key] ?? null} onChange={(v) => setWeekPreset((p) => ({ ...p, [key]: v ?? "" }))} options={presets.map((p) => ({ id: p.id, label: p.name }))} placeholder="Shift…" /></div>
                                 <div className="w-40"><SelectSearch value={weekStore[key] ?? null} onChange={(v) => setWeekStore((p) => ({ ...p, [key]: v ?? "" }))} options={grid.stores} placeholder="Store…" /></div>
                                 <Button size="md" variant="outline" onClick={() => applyWeekFor(m.userId, ws)} disabled={pending || !weekPreset[key] || !weekStore[key]}>Apply</Button>
-                                <Button size="md" variant="ghost" onClick={() => copyToNextWeek(ws)} disabled={pending}>Copy to next week</Button>
+                                <Button size="md" variant="ghost" onClick={() => copyToNextWeek(m.userId, ws)} disabled={pending}>Copy to next week</Button>
+                                <Button size="md" variant="ghost" onClick={() => copyToWholeMonth(m.userId, ws)} disabled={pending}>Copy to whole month</Button>
+                                <Button size="md" variant="ghost" className="text-danger hover:bg-danger/10" onClick={() => clearWeekFor(m.userId, ws)} disabled={pending}>Clear week</Button>
                               </div>
                             </div>
 
