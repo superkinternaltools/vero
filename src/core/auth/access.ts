@@ -24,7 +24,7 @@ export async function getAccess(): Promise<Access | null> {
   if (profile.is_admin) {
     return {
       profile,
-      allowed: [...ALL_KEYS, "settings"],
+      allowed: [...ALL_KEYS, "settings", "export"],
       landing: "/dashboard",
       isAdmin: true,
     };

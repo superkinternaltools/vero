@@ -81,10 +81,14 @@ export async function scoreSubmission(submissionId: string): Promise<void> {
       update.payout_tier_label = matchedTier.label;
       update.human_verdict = matchedTier.pct > 0 ? "approved" : "rejected";
       update.status = matchedTier.pct > 0 ? "approved" : "rejected";
-    } else if (result.verdict === "approved") {
+    } else if (campaign.payout_model !== "tiered" && result.verdict === "approved") {
+      // Binary campaigns have no tier to match — approve directly.
       update.human_verdict = "approved";
       update.status = "approved";
     }
+    // Tiered campaign whose score didn't land in any configured tier: leave
+    // status untouched so it falls to manual review instead of auto-approving
+    // with no tier on record (which would silently pay out ₹0).
   }
 
   await supabase.from("submissions").update(update).eq("id", submissionId);
