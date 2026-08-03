@@ -385,6 +385,8 @@ export async function getRosterGrid(
 // ── day-status computation ──────────────────────────────────────────────────
 type DayResult = {
   status: DayStatus;
+  /** Independent of `status` — a day can be late AND left-early/overtime at once. */
+  lateArrival: boolean;
   checkIn: string | null;
   checkOut: string | null;
   workedMinutes: number | null;
@@ -408,7 +410,7 @@ function computeDay(
   const checkOut = outP && outP !== inP ? istHM(outP.captured_at) : null;
 
   if (!inP) {
-    return { status: isPast ? "absent" : "incomplete", checkIn: null, checkOut: null, workedMinutes: null, overtimeMinutes: 0 };
+    return { status: isPast ? "absent" : "incomplete", lateArrival: false, checkIn: null, checkOut: null, workedMinutes: null, overtimeMinutes: 0 };
   }
 
   const anchor = mode === "fixed" && windows[0] ? hmToMin(windows[0].start) : hmToMin(checkIn!);
@@ -421,6 +423,7 @@ function computeDay(
   if (mode === "open") {
     return {
       status: checkOut ? "present" : "incomplete",
+      lateArrival: false,
       checkIn,
       checkOut,
       workedMinutes: worked,
@@ -449,7 +452,7 @@ function computeDay(
     if (late) status = "late";
   }
 
-  return { status, checkIn, checkOut, workedMinutes: worked, overtimeMinutes };
+  return { status, lateArrival: late, checkIn, checkOut, workedMinutes: worked, overtimeMinutes };
 }
 
 // ── attendance log (one day) ────────────────────────────────────────────────
@@ -547,6 +550,7 @@ export async function getAttendanceLog(
       workedMinutes: d.workedMinutes,
       overtimeMinutes: d.overtimeMinutes,
       status: d.status,
+      lateArrival: d.lateArrival,
       flags,
       referencePhoto: (() => {
         const p = refPathMap.get(a.user_id);
@@ -573,7 +577,7 @@ export async function getAttendanceLog(
     summary: {
       expected: rows.length,
       present: rows.filter((r) => r.checkIn != null).length,
-      late: rows.filter((r) => r.status === "late").length,
+      late: rows.filter((r) => r.lateArrival).length,
       absent: rows.filter((r) => r.status === "absent").length,
       flagged: rows.filter((r) => r.flags.length > 0).length,
     },

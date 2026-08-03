@@ -83,6 +83,9 @@ export type LogRow = {
   workedMinutes: number | null;
   overtimeMinutes: number;
   status: DayStatus;
+  /** True whenever check-in was late — independent of `status`, since a day
+   * can be BOTH late arrival AND left early (or late AND overtime). */
+  lateArrival: boolean;
   flags: string[];          // "geo" | "no_gps"
   referencePhoto: string | null;
   punches: PunchDetail[];

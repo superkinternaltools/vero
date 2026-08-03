@@ -67,11 +67,13 @@ export function AttendanceLogClient({
 
   function exportCsv() {
     const head = ["Person", "Store", "Shift", "Check-in", "Check-out", "Worked", "Overtime (min)", "Status", "Flags"];
-    const lines = visibleRows.map((r) =>
-      [r.name, r.storeName, r.shiftLabel, r.checkIn ?? "", r.checkOut ?? "", fmtMins(r.workedMinutes), r.overtimeMinutes, STATUS[r.status].label, r.flags.join("|")]
+    const lines = visibleRows.map((r) => {
+      const statusLabel =
+        r.lateArrival && r.status !== "late" ? `${STATUS[r.status].label} + Late arrival` : STATUS[r.status].label;
+      return [r.name, r.storeName, r.shiftLabel, r.checkIn ?? "", r.checkOut ?? "", fmtMins(r.workedMinutes), r.overtimeMinutes, statusLabel, r.flags.join("|")]
         .map((c) => `"${String(c).replace(/"/g, '""')}"`)
-        .join(","),
-    );
+        .join(",");
+    });
     const blob = new Blob([[head.join(","), ...lines].join("\n")], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -84,7 +86,7 @@ export function AttendanceLogClient({
   const tiles = [
     { n: visibleRows.length, l: "Expected", cls: "text-foreground" },
     { n: visibleRows.filter((r) => r.checkIn != null).length, l: "Present", cls: "text-success" },
-    { n: visibleRows.filter((r) => r.status === "late").length, l: "Late arrival", cls: "text-warning" },
+    { n: visibleRows.filter((r) => r.lateArrival).length, l: "Late arrival", cls: "text-warning" },
     { n: visibleRows.filter((r) => r.status === "absent").length, l: "Absent", cls: "text-danger" },
     { n: visibleRows.filter((r) => r.flags.length > 0).length, l: "Flagged", cls: "text-danger" },
   ];
@@ -163,7 +165,7 @@ export function AttendanceLogClient({
                 <td className="px-4 py-2.5 font-medium text-foreground">{r.name}</td>
                 <td className="px-4 py-2.5 text-muted-foreground">{r.storeName}</td>
                 <td className="px-4 py-2.5 text-muted-foreground">{r.shiftLabel}</td>
-                <td className={cn("px-4 py-2.5 tabular-nums", r.status === "late" ? "text-warning" : "text-foreground")}>{r.checkIn ?? "—"}</td>
+                <td className={cn("px-4 py-2.5 tabular-nums", r.lateArrival ? "text-warning" : "text-foreground")}>{r.checkIn ?? "—"}</td>
                 <td className="px-4 py-2.5 tabular-nums text-foreground">{r.checkOut ?? "—"}</td>
                 <td className="px-4 py-2.5 tabular-nums text-muted-foreground">
                   {fmtMins(r.workedMinutes)}
@@ -173,6 +175,11 @@ export function AttendanceLogClient({
                   <span className={cn("inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium", STATUS[r.status].cls)}>
                     {STATUS[r.status].label}
                   </span>
+                  {r.lateArrival && r.status !== "late" && (
+                    <span className="ml-1 inline-flex rounded-full bg-warning/10 px-2.5 py-0.5 text-xs font-medium text-warning">
+                      Late arrival
+                    </span>
+                  )}
                 </td>
                 <td className="px-4 py-2.5">
                   {r.flags.includes("geo") && (
