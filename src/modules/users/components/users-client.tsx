@@ -20,6 +20,7 @@ import {
   deleteShellUser,
   mapUserToShell,
   bulkApproveUsers,
+  bulkSetStatus,
   bulkSetRole,
   bulkSetDepartment,
 } from "../actions";
@@ -113,8 +114,14 @@ export function UsersClient({
 
   // ── Bulk selection ─────────────────────────────────────────────────────
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkStatus, setBulkStatus] = useState<UserStatus | "">("");
   const [bulkRoleIds, setBulkRoleIds] = useState<string[]>([]);
   const [bulkDeptIds, setBulkDeptIds] = useState<string[]>([]);
+
+  // ── Users table filters ─────────────────────────────────────────────────
+  const [filterStatus, setFilterStatus] = useState<string[]>([]);
+  const [filterRoleIds, setFilterRoleIds] = useState<string[]>([]);
+  const [filterDeptIds, setFilterDeptIds] = useState<string[]>([]);
 
   // ── Bulk map-to-shell modal ────────────────────────────────────────────────
   const [bulkMapOpen, setBulkMapOpen] = useState(false);
@@ -139,6 +146,7 @@ export function UsersClient({
 
   function clearSelection() {
     setSelectedIds(new Set());
+    setBulkStatus("");
     setBulkRoleIds([]);
     setBulkDeptIds([]);
     setBulkMappings({});
@@ -151,6 +159,15 @@ export function UsersClient({
     if (!pendingIds.length) return;
     startTransition(async () => {
       await bulkApproveUsers(pendingIds);
+      clearSelection();
+      router.refresh();
+    });
+  }
+
+  function applyBulkStatus() {
+    if (!bulkStatus) return;
+    startTransition(async () => {
+      await bulkSetStatus(Array.from(selectedIds), bulkStatus);
       clearSelection();
       router.refresh();
     });
@@ -402,7 +419,14 @@ export function UsersClient({
       .filter(Boolean);
 
   const pendingUsers = users.filter((u) => u.status === "pending");
-  const otherUsers = users.filter((u) => u.status !== "pending");
+  const allOtherUsers = users.filter((u) => u.status !== "pending");
+  const otherUsers = allOtherUsers.filter((u) => {
+    if (filterStatus.length && !filterStatus.includes(u.status)) return false;
+    if (filterRoleIds.length && !u.roleIds.some((r) => filterRoleIds.includes(r))) return false;
+    if (filterDeptIds.length && !u.departmentIds.some((d) => filterDeptIds.includes(d))) return false;
+    return true;
+  });
+  const usersFiltered = filterStatus.length > 0 || filterRoleIds.length > 0 || filterDeptIds.length > 0;
 
   return (
     <div className="space-y-8">
@@ -411,7 +435,7 @@ export function UsersClient({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Users</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            {otherUsers.length} user{otherUsers.length === 1 ? "" : "s"} ·{" "}
+            {allOtherUsers.length} user{allOtherUsers.length === 1 ? "" : "s"} ·{" "}
             {pendingUsers.length} pending · {shellUsers.length} shell user
             {shellUsers.length === 1 ? "" : "s"}
           </p>
@@ -432,83 +456,141 @@ export function UsersClient({
         </div>
       </div>
 
-      {/* ── Shell users table ── */}
-      {shellUsers.length > 0 && (
-        <div>
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            Shell users — not yet joined ({shellUsers.length})
+      {/* ── Real users table ── */}
+      <div>
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+            Users ({otherUsers.length}
+            {usersFiltered ? ` of ${allOtherUsers.length}` : ""})
           </h2>
-          <div className="overflow-x-auto rounded-2xl border border-border bg-card">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-                  <th className="px-4 py-3 font-semibold">ID</th>
-                  <th className="px-4 py-3 font-semibold">Name</th>
-                  <th className="px-4 py-3 font-semibold">Job Title</th>
-                  <th className="px-4 py-3 font-semibold">Role</th>
-                  <th className="px-4 py-3 font-semibold">Stores</th>
-                  <th className="px-4 py-3 text-right font-semibold">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {shellUsers.map((s) => (
-                  <tr key={s.id} className="border-b border-border align-top last:border-0">
-                    <td className="px-4 py-3">
-                      <span className="rounded-md bg-muted px-2 py-0.5 font-mono text-xs text-foreground">
-                        {s.id}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 font-medium text-foreground">{s.display_name}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{s.jobTitleName ?? "—"}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{s.roleName ?? "—"}</td>
-                    <td className="px-4 py-3 text-muted-foreground">
-                      {s.storeLabels.length > 0 ? (
-                        <span title={s.storeLabels.join(", ")}>
-                          {s.storeLabels.length} store{s.storeLabels.length !== 1 ? "s" : ""}
-                        </span>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-1">
-                        <button
-                          type="button"
-                          onClick={() => openEditShell(s)}
-                          aria-label="Edit"
-                          className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => removeShell(s)}
-                          disabled={pending}
-                          aria-label="Delete"
-                          className="rounded-lg p-2 text-muted-foreground hover:bg-danger/10 hover:text-danger"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="w-40">
+              <MultiSelect
+                options={[
+                  { id: "active", label: "Active" },
+                  { id: "inactive", label: "Inactive" },
+                ]}
+                selected={filterStatus}
+                onChange={setFilterStatus}
+                placeholder="All statuses"
+              />
+            </div>
+            <div className="w-44">
+              <MultiSelect
+                options={roles.map((r) => ({ id: r.id, label: r.name }))}
+                selected={filterRoleIds}
+                onChange={setFilterRoleIds}
+                placeholder="All roles"
+              />
+            </div>
+            <div className="w-44">
+              <MultiSelect
+                options={departments.map((d) => ({ id: d.id, label: d.name }))}
+                selected={filterDeptIds}
+                onChange={setFilterDeptIds}
+                placeholder="All departments"
+              />
+            </div>
+            {usersFiltered && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFilterStatus([]);
+                  setFilterRoleIds([]);
+                  setFilterDeptIds([]);
+                }}
+                className="text-xs font-medium text-muted-foreground underline hover:text-foreground"
+              >
+                Clear filters
+              </button>
+            )}
           </div>
         </div>
-      )}
-
-      {shellUsers.length === 0 && (
-        <button
-          type="button"
-          onClick={openAddShell}
-          className="flex w-full items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-border bg-card py-8 text-sm text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
-        >
-          <Plus className="h-4 w-4" />
-          Add your first shell user
-        </button>
-      )}
+        <div className="overflow-x-auto rounded-2xl border border-border bg-card">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                <th className="w-10 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    checked={otherUsers.length > 0 && otherUsers.every((u) => selectedIds.has(u.id))}
+                    onChange={() => toggleSelectAllIn(otherUsers)}
+                    className="h-4 w-4 cursor-pointer rounded accent-primary"
+                  />
+                </th>
+                <th className="px-4 py-3 font-semibold">Name</th>
+                <th className="px-4 py-3 font-semibold">Email</th>
+                <th className="px-4 py-3 font-semibold">Status</th>
+                <th className="px-4 py-3 font-semibold">Roles</th>
+                <th className="px-4 py-3 font-semibold">Departments</th>
+                <th className="px-4 py-3 text-right font-semibold">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {otherUsers.map((u) => (
+                <tr key={u.id} className="border-b border-border align-top last:border-0">
+                  <td className="px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(u.id)}
+                      onChange={() => toggleSelect(u.id)}
+                      className="h-4 w-4 cursor-pointer rounded accent-primary"
+                    />
+                  </td>
+                  <td className="px-4 py-3 font-medium text-foreground">
+                    {u.display_name ?? "—"}
+                  </td>
+                  <td className="px-4 py-3 text-muted-foreground">{u.email}</td>
+                  <td className="px-4 py-3">
+                    <span
+                      className={cn(
+                        "inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium capitalize",
+                        STATUS_STYLES[u.status],
+                      )}
+                    >
+                      {u.status}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-muted-foreground">
+                    {u.roleNames.join(", ") || "—"}
+                  </td>
+                  <td className="px-4 py-3 text-muted-foreground">
+                    {u.departmentNames.join(", ") || "—"}
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openEdit(u)}
+                        aria-label="Edit"
+                        className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeUser(u)}
+                        disabled={pending}
+                        aria-label="Delete"
+                        className="rounded-lg p-2 text-muted-foreground hover:bg-danger/10 hover:text-danger"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {otherUsers.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="p-10 text-center text-sm text-muted-foreground">
+                    {usersFiltered ? "No users match these filters." : "No users yet."}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       {/* ── Pending approvals table ── */}
       {pendingUsers.length > 0 && (
@@ -599,96 +681,83 @@ export function UsersClient({
         </div>
       )}
 
-      {/* ── Real users table ── */}
-      <div>
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-          Users ({otherUsers.length})
-        </h2>
-        <div className="overflow-x-auto rounded-2xl border border-border bg-card">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <th className="w-10 px-4 py-3">
-                  <input
-                    type="checkbox"
-                    checked={otherUsers.length > 0 && otherUsers.every((u) => selectedIds.has(u.id))}
-                    onChange={() => toggleSelectAllIn(otherUsers)}
-                    className="h-4 w-4 cursor-pointer rounded accent-primary"
-                  />
-                </th>
-                <th className="px-4 py-3 font-semibold">Name</th>
-                <th className="px-4 py-3 font-semibold">Email</th>
-                <th className="px-4 py-3 font-semibold">Status</th>
-                <th className="px-4 py-3 font-semibold">Roles</th>
-                <th className="px-4 py-3 font-semibold">Departments</th>
-                <th className="px-4 py-3 text-right font-semibold">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {otherUsers.map((u) => (
-                <tr key={u.id} className="border-b border-border align-top last:border-0">
-                  <td className="px-4 py-3">
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.has(u.id)}
-                      onChange={() => toggleSelect(u.id)}
-                      className="h-4 w-4 cursor-pointer rounded accent-primary"
-                    />
-                  </td>
-                  <td className="px-4 py-3 font-medium text-foreground">
-                    {u.display_name ?? "—"}
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground">{u.email}</td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={cn(
-                        "inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium capitalize",
-                        STATUS_STYLES[u.status],
+      {/* ── Shell users table ── */}
+      {shellUsers.length > 0 && (
+        <div>
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+            Shell users — not yet joined ({shellUsers.length})
+          </h2>
+          <div className="overflow-x-auto rounded-2xl border border-border bg-card">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="px-4 py-3 font-semibold">ID</th>
+                  <th className="px-4 py-3 font-semibold">Name</th>
+                  <th className="px-4 py-3 font-semibold">Job Title</th>
+                  <th className="px-4 py-3 font-semibold">Role</th>
+                  <th className="px-4 py-3 font-semibold">Stores</th>
+                  <th className="px-4 py-3 text-right font-semibold">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shellUsers.map((s) => (
+                  <tr key={s.id} className="border-b border-border align-top last:border-0">
+                    <td className="px-4 py-3">
+                      <span className="rounded-md bg-muted px-2 py-0.5 font-mono text-xs text-foreground">
+                        {s.id}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 font-medium text-foreground">{s.display_name}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{s.jobTitleName ?? "—"}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{s.roleName ?? "—"}</td>
+                    <td className="px-4 py-3 text-muted-foreground">
+                      {s.storeLabels.length > 0 ? (
+                        <span title={s.storeLabels.join(", ")}>
+                          {s.storeLabels.length} store{s.storeLabels.length !== 1 ? "s" : ""}
+                        </span>
+                      ) : (
+                        "—"
                       )}
-                    >
-                      {u.status}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground">
-                    {u.roleNames.join(", ") || "—"}
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground">
-                    {u.departmentNames.join(", ") || "—"}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={() => openEdit(u)}
-                        aria-label="Edit"
-                        className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => removeUser(u)}
-                        disabled={pending}
-                        aria-label="Delete"
-                        className="rounded-lg p-2 text-muted-foreground hover:bg-danger/10 hover:text-danger"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {otherUsers.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="p-10 text-center text-sm text-muted-foreground">
-                    No users yet.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          type="button"
+                          onClick={() => openEditShell(s)}
+                          aria-label="Edit"
+                          className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeShell(s)}
+                          disabled={pending}
+                          aria-label="Delete"
+                          className="rounded-lg p-2 text-muted-foreground hover:bg-danger/10 hover:text-danger"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      )}
+
+      {shellUsers.length === 0 && (
+        <button
+          type="button"
+          onClick={openAddShell}
+          className="flex w-full items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-border bg-card py-8 text-sm text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
+        >
+          <Plus className="h-4 w-4" />
+          Add your first shell user
+        </button>
+      )}
 
       {/* ── Edit real user modal ── */}
       <Modal open={open} onClose={() => setOpen(false)} title={`Edit ${editing?.email ?? "user"}`}>
@@ -1010,6 +1079,23 @@ export function UsersClient({
                 Approve {selectedPendingCount} pending
               </Button>
             )}
+
+            <div className="flex items-center gap-1.5">
+              <select
+                value={bulkStatus}
+                onChange={(e) => setBulkStatus(e.target.value as UserStatus | "")}
+                className="h-10 rounded-xl border border-border bg-input px-3 text-sm text-foreground focus:border-primary focus:outline-none"
+              >
+                <option value="">Set status…</option>
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+              </select>
+              {bulkStatus && (
+                <Button size="md" onClick={applyBulkStatus} disabled={pending}>
+                  Apply
+                </Button>
+              )}
+            </div>
 
             <div className="flex items-center gap-1.5">
               <div className="w-48">

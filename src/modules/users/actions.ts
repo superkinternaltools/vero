@@ -31,6 +31,20 @@ export async function bulkApproveUsers(ids: string[]): Promise<Result> {
   return {};
 }
 
+export async function bulkSetStatus(ids: string[], status: UserStatus): Promise<Result> {
+  if (!ids.length) return {};
+  const me = await getCurrentProfile();
+  if (!me?.is_admin) return { error: "Not authorized." };
+  // Never let a bulk action change the acting admin's own status.
+  const targetIds = ids.filter((id) => id !== me.id);
+  if (!targetIds.length) return {};
+  const supabase = await createClient();
+  const { error } = await supabase.from("profiles").update({ status }).in("id", targetIds);
+  if (error) return { error: error.message };
+  revalidatePath("/users");
+  return {};
+}
+
 export async function bulkSetRole(ids: string[], roleIds: string[]): Promise<Result> {
   if (!ids.length) return {};
   const me = await getCurrentProfile();
