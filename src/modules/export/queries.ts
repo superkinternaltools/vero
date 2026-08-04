@@ -53,34 +53,78 @@ export async function listCampaignOptions(): Promise<CampaignOption[]> {
 
 type Resolved = { label: string; pct: number | null };
 
-/** Verdict resolution for payout purposes: a human reviewer's call is always
- * final. Only when no human verdict exists yet do we fall back to the AI's
- * score — and for tiered campaigns that means matching the AI's suggested
- * tier, not just a raw approved/rejected. If neither exists, or the AI's
- * score never landed inside a configured tier, the task is unresolved (no
- * payout) rather than silently guessed at. */
+/** Verdict resolution for payout purposes — mirrors summary-client.tsx's
+ * cellDisplay(), the one place in the app already proven to show the right
+ * tier per cell. Key insight taken from there: ai-review/score.ts writes the
+ * matched tier's own label text into ai_verdict (not a raw score), so for
+ * tiered campaigns the tier is looked up directly by name — never
+ * recomputed from a numeric score.
+ *
+ * Tiered campaigns:
+ *   1. Human explicitly picked a tier (payout_tier_label) — final.
+ *   2. Human verdict but no tier on record (binary-style approve/reject even
+ *      though the campaign is tiered) — generic full/zero.
+ *   3. No human verdict yet, but AI scored it — ai_verdict already holds a
+ *      tier label; matched directly against the tier table and counted as
+ *      final (AI-only verdicts count the same as a human's, per instruction).
+ *   4. Nothing at all yet — unresolved.
+ *
+ * Binary campaigns: human_verdict is final; ai_verdict is the fallback.
+ */
 function resolveTaskVerdict(task: any, sub: any): Resolved {
-  const tiers: any[] = task.campaigns?.payout_tiers ?? [];
   const isTiered = task.campaigns?.payout_model === "tiered";
+  const tiers: any[] = task.campaigns?.payout_tiers ?? [];
 
-  if (sub?.human_verdict) {
-    if (sub.payout_tier_label) {
-      const tier = tiers.find((tr) => tr.label === sub.payout_tier_label);
-      if (tier) return { label: tier.label, pct: tier.pct };
+  if (isTiered) {
+    if (sub?.human_verdict) {
+      if (sub.payout_tier_label) {
+        const tier = tiers.find((tr) => tr.label === sub.payout_tier_label);
+        if (tier) return { label: tier.label, pct: tier.pct };
+        return { label: sub.payout_tier_label, pct: null }; // recorded tier no longer in this campaign's config
+      }
+      return sub.human_verdict === "approved" ? { label: "Approved", pct: 100 } : { label: "Rejected", pct: 0 };
     }
-    return sub.human_verdict === "approved" ? { label: "Approved", pct: 100 } : { label: "Rejected", pct: 0 };
-  }
 
-  if (sub?.ai_verdict) {
-    if (isTiered) {
+    if (sub?.ai_verdict) {
       const tier = tiers.find((tr) => tr.label === sub.ai_verdict);
       if (tier) return { label: tier.label, pct: tier.pct };
-      return { label: "AI score — no matching tier yet", pct: null };
+      return sub.ai_verdict === "approved" ? { label: "Approved", pct: 100 } : { label: "Rejected", pct: 0 };
     }
-    return sub.ai_verdict === "approved" ? { label: "Approved", pct: 100 } : { label: "Rejected", pct: 0 };
+
+    return { label: STATUS_LABEL[task.status] ?? task.status, pct: null };
   }
 
+  if (sub?.human_verdict) {
+    return sub.human_verdict === "approved" ? { label: "Approved", pct: 100 } : { label: "Rejected", pct: 0 };
+  }
+  if (sub?.ai_verdict) {
+    return sub.ai_verdict === "approved" ? { label: "Approved", pct: 100 } : { label: "Rejected", pct: 0 };
+  }
   return { label: STATUS_LABEL[task.status] ?? task.status, pct: null };
+}
+
+/** PostgREST caps a single .select() at 1000 rows — a whole month across
+ * every store/campaign easily exceeds that, which silently truncated both
+ * queries below (most submissions were missing, so payout looked ₹0 almost
+ * everywhere). Pages through in batches until a short page signals the end. */
+async function fetchAllRows(
+  buildQuery: (from: number, to: number) => PromiseLike<{ data: any[] | null; error: any }>,
+  pageSize = 1000,
+): Promise<any[]> {
+  const results: any[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await buildQuery(from, from + pageSize - 1);
+    if (error) {
+      // Surface it — a silently swallowed error here is exactly what made
+      // "no submissions found" indistinguishable from "genuinely unreviewed".
+      console.error("[export] query page failed:", error);
+      break;
+    }
+    if (!data || data.length === 0) break;
+    results.push(...data);
+    if (data.length < pageSize) break;
+  }
+  return results;
 }
 
 /** Payout/submission data spans every store — reads via the service-role
@@ -91,25 +135,34 @@ export async function getExportGroups(month: string): Promise<ExportGroupRow[]> 
   const admin = createAdminClient();
   const { start, end } = monthRange(month);
 
-  const { data: tasks } = await admin
-    .from("tasks")
-    .select(
-      "id, campaign_id, store_id, due_date, status, stores ( code, name ), campaigns ( name, payout_enabled, payout_amount, payout_model, payout_tiers )",
-    )
-    .gte("due_date", start)
-    .lte("due_date", end);
-
-  const T = (tasks as any[]) ?? [];
-  const taskIds = T.map((t) => t.id as string);
+  const T = await fetchAllRows((from, to) =>
+    admin
+      .from("tasks")
+      .select(
+        "id, campaign_id, store_id, due_date, status, stores ( code, name ), campaigns ( name, payout_enabled, payout_amount, payout_model, payout_tiers )",
+      )
+      .gte("due_date", start)
+      .lte("due_date", end)
+      .order("id")
+      .range(from, to),
+  );
+  // Filtering submissions by every individual task_id (thousands, for a
+  // whole month across a whole chain) makes the .in() filter itself huge
+  // enough to fail silently. Campaigns in scope are a far smaller set, so
+  // filter by that instead and match back to tasks by task_id in JS.
+  const campaignIds = [...new Set(T.map((t) => t.campaign_id as string))];
 
   const subByTask = new Map<string, any>();
-  if (taskIds.length) {
-    const { data: subs } = await admin
-      .from("submissions")
-      .select("task_id, human_verdict, ai_verdict, payout_tier_label, created_at")
-      .in("task_id", taskIds)
-      .order("created_at", { ascending: false });
-    for (const s of (subs as any[]) ?? []) {
+  if (campaignIds.length) {
+    const subs = await fetchAllRows((from, to) =>
+      admin
+        .from("submissions")
+        .select("task_id, campaign_id, human_verdict, ai_verdict, payout_tier_label, reviewer_score, ai_score, created_at")
+        .in("campaign_id", campaignIds)
+        .order("created_at", { ascending: false })
+        .range(from, to),
+    );
+    for (const s of subs) {
       if (s.task_id && !subByTask.has(s.task_id)) subByTask.set(s.task_id, s);
     }
   }
@@ -122,8 +175,11 @@ export async function getExportGroups(month: string): Promise<ExportGroupRow[]> 
     week: number;
     payoutEnabled: boolean;
     payoutAmount: number;
+    payoutModel: string;
     taskCount: number;
     resolved: Resolved[];
+    lastTask: any;
+    lastSub: any;
   };
   const groups = new Map<string, Group>();
 
@@ -139,13 +195,19 @@ export async function getExportGroups(month: string): Promise<ExportGroupRow[]> 
         week,
         payoutEnabled: t.campaigns?.payout_enabled ?? false,
         payoutAmount: Number(t.campaigns?.payout_amount ?? 0),
+        payoutModel: t.campaigns?.payout_model ?? "binary",
         taskCount: 0,
         resolved: [],
+        lastTask: null,
+        lastSub: null,
       });
     }
     const g = groups.get(key)!;
     g.taskCount += 1;
-    g.resolved.push(resolveTaskVerdict(t, subByTask.get(t.id)));
+    const sub = subByTask.get(t.id);
+    g.resolved.push(resolveTaskVerdict(t, sub));
+    g.lastTask = t;
+    g.lastSub = sub;
   }
 
   const rows: ExportGroupRow[] = [...groups.values()].map((g) => {
@@ -165,6 +227,7 @@ export async function getExportGroups(month: string): Promise<ExportGroupRow[]> 
       statusSummary = [...counts.entries()].map(([label, n]) => `${label} (${n})`).join(", ");
     }
 
+    const single = g.taskCount === 1;
     return {
       campaignId: g.campaignId,
       campaignName: g.campaignName,
@@ -177,6 +240,12 @@ export async function getExportGroups(month: string): Promise<ExportGroupRow[]> 
       statusSummary,
       expectedPayout,
       actualPayout,
+      payoutModel: g.payoutModel,
+      taskStatus: single ? g.lastTask.status : null,
+      hasSubmission: single ? g.lastSub != null : null,
+      reviewerScore: single ? (g.lastSub?.reviewer_score ?? null) : null,
+      aiScore: single ? (g.lastSub?.ai_score ?? null) : null,
+      recordedTierLabel: single ? (g.lastSub?.payout_tier_label ?? null) : null,
     };
   });
 

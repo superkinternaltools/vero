@@ -25,4 +25,15 @@ export type ExportGroupRow = {
   expectedPayout: number;
   /** What was actually earned, based on real approvals (tiered-aware). */
   actualPayout: number;
+  /** "binary" or "tiered" — this campaign's actual configured model. If
+   * binary, "Approved"/"Rejected"/"Pending" IS the correct output, not a bug. */
+  payoutModel: string;
+  /** Raw diagnostic fields — only populated for single-task weeks (one row
+   * per store per week is the common case). Lets us see exactly why a row
+   * resolved the way it did instead of guessing. Null for multi-task weeks. */
+  taskStatus: string | null;
+  hasSubmission: boolean | null;
+  reviewerScore: number | null;
+  aiScore: number | null;
+  recordedTierLabel: string | null;
 };

@@ -81,7 +81,22 @@ export function ExportClient({
   function exportSubmissionStatus() {
     downloadCsv(
       `submission-status-${month}.csv`,
-      ["Campaign", "Month", "Store Name", "Week", "Expected Weekly Payout", "Status", "Actual Payout"],
+      [
+        "Campaign",
+        "Month",
+        "Store Name",
+        "Week",
+        "Expected Weekly",
+        "Payout Tier",
+        "Calculated Payout",
+        // Diagnostic columns — Task Status onward blank whenever a week has more than one task.
+        "Payout Model",
+        "Task Status",
+        "Has Submission",
+        "Reviewer Score",
+        "AI Score",
+        "Recorded Tier Label",
+      ],
       visibleRows.map((r) => [
         r.campaignName,
         r.month,
@@ -90,6 +105,12 @@ export function ExportClient({
         r.expectedPayout.toFixed(2),
         r.statusSummary,
         r.actualPayout.toFixed(2),
+        r.payoutModel,
+        r.taskStatus ?? "",
+        r.hasSubmission == null ? "" : r.hasSubmission ? "yes" : "no",
+        r.reviewerScore ?? "",
+        r.aiScore ?? "",
+        r.recordedTierLabel ?? "",
       ]),
     );
   }
