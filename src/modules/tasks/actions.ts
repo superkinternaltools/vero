@@ -282,3 +282,15 @@ export async function purgePendingTasks(campaignId: string): Promise<void> {
     .gte("due_date", today);
   revalidatePath("/tasks");
 }
+
+/** Hard-deletes every task (any status) for a store that's been removed from a
+ * campaign's targeting — otherwise those tasks (and Summary/Leaderboard counts
+ * derived from them) live on forever, since task generation only ever upserts,
+ * never deletes. Submissions cascade-delete with their task (tasks.id FK). */
+export async function pruneTasksForStores(campaignId: string, storeIds: string[]): Promise<void> {
+  if (!storeIds.length) return;
+  const supabase = await createClient();
+  await supabase.from("tasks").delete().eq("campaign_id", campaignId).in("store_id", storeIds);
+  revalidatePath("/tasks");
+  revalidatePath("/summary");
+}

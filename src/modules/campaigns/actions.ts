@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/core/db/server";
-import { autoGenerateTasks, purgePendingTasks } from "@/modules/tasks/actions";
+import { autoGenerateTasks, purgePendingTasks, pruneTasksForStores } from "@/modules/tasks/actions";
 import type { CampaignFormValues } from "./types";
 
 type Result = { error?: string; id?: string };
@@ -80,9 +80,22 @@ export async function createCampaign(v: CampaignFormValues): Promise<Result> {
 export async function updateCampaign(id: string, v: CampaignFormValues): Promise<Result> {
   if (!v.name.trim()) return { error: "Campaign name is required." };
   const supabase = await createClient();
+
+  const { data: existingStores } = await supabase
+    .from("campaign_stores")
+    .select("store_id")
+    .eq("campaign_id", id);
+  const removedStoreIds = (existingStores ?? [])
+    .map((r) => r.store_id)
+    .filter((storeId) => !v.storeIds.includes(storeId));
+
   const { error } = await supabase.from("campaigns").update(scalars(v)).eq("id", id);
   if (error) return { error: error.message };
   await replaceJoins(supabase, id, v);
+  // Stores removed from targeting keep no orphaned tasks behind — otherwise
+  // Summary/Leaderboard counts (derived from tasks, not campaign_stores) stay
+  // stuck at the old store count forever.
+  if (removedStoreIds.length) await pruneTasksForStores(id, removedStoreIds);
   revalidatePath("/campaigns");
   if (v.status === "active") {
     await autoGenerateTasks(id);
