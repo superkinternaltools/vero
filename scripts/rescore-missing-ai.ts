@@ -84,11 +84,15 @@ async function main() {
     return;
   }
 
-  console.log(`\nScoring ${willScore} submissions (4 at a time)...`);
+  // Low concurrency deliberately: OpenAI fetches each image_url itself, and
+  // running many of these at once was overloading Supabase storage enough to
+  // trip OpenAI's own download timeout ("Timeout while downloading...") —
+  // confirmed by testing the same submissions sequentially vs concurrently.
+  const CONCURRENCY = 2;
+  console.log(`\nScoring ${willScore} submissions (${CONCURRENCY} at a time)...`);
   const toScore = submissions.filter((s) => campaignById.get(s.campaign_id)?.ai_review);
-  const CONCURRENCY = 4;
   let done = 0;
-  let failed = 0;
+  let threw = 0;
   for (let i = 0; i < toScore.length; i += CONCURRENCY) {
     const batch = toScore.slice(i, i + CONCURRENCY);
     await Promise.all(
@@ -96,16 +100,30 @@ async function main() {
         try {
           await scoreSubmission(s.id);
         } catch (err) {
-          failed += 1;
-          console.error(`  failed on submission ${s.id}:`, err);
+          threw += 1;
+          console.error(`  threw on submission ${s.id}:`, err);
         }
       }),
     );
     done += batch.length;
-    console.log(`  ${done}/${toScore.length} processed (${failed} failed)`);
+    console.log(`  ${done}/${toScore.length} processed (${threw} threw)`);
   }
 
-  console.log(`\nDone. ${done - failed} scored, ${failed} failed.`);
+  // scoreSubmission() never throws on a scoring failure (e.g. a timed-out
+  // image download) — it just leaves ai_score null so the submission falls
+  // to manual review. Re-query (unfiltered — filtering by up to ~1800
+  // individual UUIDs risks the same PostgREST .in() size limit that bit
+  // Export earlier) to report the real number still missing, rather than
+  // trusting the exception count above.
+  const stillMissing = await fetchAllRows((from, to) =>
+    admin.from("submissions").select("id").is("ai_score", null).range(from, to),
+  );
+  const stillNeedsScoring = stillMissing.length - wontScore;
+  console.log(
+    `\nDone. ${toScore.length - stillNeedsScoring} of ${toScore.length} scored this pass. ` +
+      `${stillNeedsScoring} still need scoring (mostly transient image-download timeouts — safe to re-run this script again to pick those up). ` +
+      `${wontScore} will always stay unscored (AI review off for their campaign).`,
+  );
 }
 
 main().then(() => process.exit(0)).catch((err) => {

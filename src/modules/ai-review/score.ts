@@ -36,6 +36,11 @@ export async function scoreSubmission(submissionId: string): Promise<void> {
 
   let result = null;
   for (let attempt = 0; attempt < 3; attempt++) {
+    // OpenAI fetches each image_url itself; under concurrent load Supabase
+    // storage can be slow enough to trip OpenAI's own download timeout
+    // ("Timeout while downloading..."). Retrying instantly just repeats the
+    // same race, so back off between attempts to give storage time to recover.
+    if (attempt > 0) await new Promise((r) => setTimeout(r, attempt * 2000));
     try {
       result = await runAiScoring({
         referenceImages: campaign.reference_images ?? [],
