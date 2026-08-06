@@ -30,6 +30,44 @@ export type ReviewRow = {
   payoutTiers: PayoutTier[];
 };
 
+/** PostgREST caps a single .select() at 1000 rows — with more than 1000
+ * pending_review submissions system-wide, the oldest 1000 (by created_at)
+ * were silently the only ones ever fetched, so anything past that window
+ * (e.g. a department's newer submissions) never even reached the
+ * allowed-campaign filter below. Pages through in batches until a short
+ * page signals the end. */
+async function fetchAllPendingReviewRows(
+  admin: ReturnType<typeof createAdminClient>,
+  pageSize = 1000,
+): Promise<any[]> {
+  const results: any[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await admin
+      .from("submissions")
+      .select(
+        `
+        id, campaign_id, created_at, photos, comments, ai_score, ai_verdict, ai_assessment,
+        geofence_flag, geofence_distance_m, duplicate_flag, no_location_flag,
+        campaigns ( name, ai_score_visible, reference_images, payout_model, payout_tiers,
+                    campaign_departments ( departments ( name ) ) ),
+        stores ( name ),
+        submitter:submitted_by ( display_name, email )
+        `,
+      )
+      .eq("status", "pending_review")
+      .order("created_at", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) {
+      console.error("[review] query page failed:", error);
+      break;
+    }
+    if (!data || data.length === 0) break;
+    results.push(...data);
+    if (data.length < pageSize) break;
+  }
+  return results;
+}
+
 export async function listPendingReviews(scope: {
   userId: string;
   isAdmin: boolean;
@@ -41,22 +79,9 @@ export async function listPendingReviews(scope: {
   }
 
   const admin = createAdminClient();
-  const { data } = await admin
-    .from("submissions")
-    .select(
-      `
-      id, campaign_id, created_at, photos, comments, ai_score, ai_verdict, ai_assessment,
-      geofence_flag, geofence_distance_m, duplicate_flag, no_location_flag,
-      campaigns ( name, ai_score_visible, reference_images, payout_model, payout_tiers,
-                  campaign_departments ( departments ( name ) ) ),
-      stores ( name ),
-      submitter:submitted_by ( display_name, email )
-      `,
-    )
-    .eq("status", "pending_review")
-    .order("created_at", { ascending: true });
+  const data = await fetchAllPendingReviewRows(admin);
 
-  const rows = ((data as any[]) ?? []).filter(
+  const rows = data.filter(
     (row) => !allowedCampaignIds || allowedCampaignIds.has(row.campaign_id),
   );
 
