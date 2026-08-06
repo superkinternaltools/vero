@@ -10,9 +10,12 @@ import type { PayoutTier } from "@/modules/campaigns/types";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export type ReviewRow = {
   id: string;
+  campaignId: string;
   campaignName: string;
+  storeId: string;
   storeName: string;
-  departmentName: string | null;
+  departmentIds: string[];
+  departmentNames: string[];
   submittedByName: string | null;
   submittedAt: string;
   aiScore: number | null;
@@ -46,10 +49,10 @@ async function fetchAllPendingReviewRows(
       .from("submissions")
       .select(
         `
-        id, campaign_id, created_at, photos, comments, ai_score, ai_verdict, ai_assessment,
+        id, campaign_id, store_id, created_at, photos, comments, ai_score, ai_verdict, ai_assessment,
         geofence_flag, geofence_distance_m, duplicate_flag, no_location_flag,
         campaigns ( name, ai_score_visible, reference_images, payout_model, payout_tiers,
-                    campaign_departments ( departments ( name ) ) ),
+                    campaign_departments ( department_id, departments ( name ) ) ),
         stores ( name ),
         submitter:submitted_by ( display_name, email )
         `,
@@ -87,9 +90,14 @@ export async function listPendingReviews(scope: {
 
   return rows.map((row): ReviewRow => ({
     id: row.id,
+    campaignId: row.campaign_id,
     campaignName: row.campaigns?.name ?? "—",
+    storeId: row.store_id,
     storeName: row.stores?.name ?? "—",
-    departmentName: row.campaigns?.campaign_departments?.[0]?.departments?.name ?? null,
+    departmentIds: (row.campaigns?.campaign_departments ?? []).map((d: any) => d.department_id),
+    departmentNames: (row.campaigns?.campaign_departments ?? [])
+      .map((d: any) => d.departments?.name)
+      .filter(Boolean),
     submittedByName: row.submitter?.display_name ?? row.submitter?.email ?? null,
     submittedAt: row.created_at,
     aiScore: row.ai_score,

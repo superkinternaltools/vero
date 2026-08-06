@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { X, Eye, EyeOff, LocateOff, MapPinOff, CopyX, ChevronLeft, ChevronRight, ZoomIn } from "lucide-react";
 import { Button } from "@/core/ui/button";
+import { MultiSelect } from "@/core/ui/multi-select";
 import { cn } from "@/core/lib/utils";
 import type { ReviewRow } from "../queries";
 import type { PayoutTier } from "@/modules/campaigns/types";
@@ -50,8 +51,62 @@ export function ReviewClient({
   const [expandedPhoto, setExpandedPhoto] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const activeIndex = reviews.findIndex((r) => r.id === activeId);
-  const active = activeIndex >= 0 ? reviews[activeIndex] : null;
+  // ── Filters + sort ──────────────────────────────────────────────────────
+  const [sortBy, setSortBy] = useState<"oldest" | "newest" | "ai_desc" | "ai_asc">("oldest");
+  const [filterCampaignIds, setFilterCampaignIds] = useState<string[]>([]);
+  const [filterDeptIds, setFilterDeptIds] = useState<string[]>([]);
+  const [filterStoreIds, setFilterStoreIds] = useState<string[]>([]);
+
+  const campaignOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const r of reviews) map.set(r.campaignId, r.campaignName);
+    return [...map.entries()]
+      .map(([id, label]) => ({ id, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [reviews]);
+
+  const departmentOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const r of reviews) r.departmentIds.forEach((id, i) => map.set(id, r.departmentNames[i]));
+    return [...map.entries()]
+      .map(([id, label]) => ({ id, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [reviews]);
+
+  const storeOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const r of reviews) map.set(r.storeId, r.storeName);
+    return [...map.entries()]
+      .map(([id, label]) => ({ id, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [reviews]);
+
+  const isFiltered = filterCampaignIds.length > 0 || filterDeptIds.length > 0 || filterStoreIds.length > 0;
+
+  const visibleReviews = useMemo(() => {
+    const list = reviews.filter((r) => {
+      if (filterCampaignIds.length && !filterCampaignIds.includes(r.campaignId)) return false;
+      if (filterStoreIds.length && !filterStoreIds.includes(r.storeId)) return false;
+      if (filterDeptIds.length && !r.departmentIds.some((d) => filterDeptIds.includes(d))) return false;
+      return true;
+    });
+    return list.slice().sort((a, b) => {
+      switch (sortBy) {
+        case "newest":
+          return b.submittedAt.localeCompare(a.submittedAt);
+        case "ai_desc":
+          return (b.aiScore ?? -1) - (a.aiScore ?? -1);
+        case "ai_asc":
+          return (a.aiScore ?? 11) - (b.aiScore ?? 11);
+        case "oldest":
+        default:
+          return a.submittedAt.localeCompare(b.submittedAt);
+      }
+    });
+  }, [reviews, filterCampaignIds, filterDeptIds, filterStoreIds, sortBy]);
+
+  const activeIndex = visibleReviews.findIndex((r) => r.id === activeId);
+  const active = activeIndex >= 0 ? visibleReviews[activeIndex] : null;
 
   function open(r: ReviewRow) {
     setActiveId(r.id);
@@ -64,12 +119,12 @@ export function ReviewClient({
     setError(null);
   }
 
-  const goPrev = () => activeIndex > 0 && open(reviews[activeIndex - 1]);
-  const goNext = () => activeIndex < reviews.length - 1 && open(reviews[activeIndex + 1]);
+  const goPrev = () => activeIndex > 0 && open(visibleReviews[activeIndex - 1]);
+  const goNext = () => activeIndex < visibleReviews.length - 1 && open(visibleReviews[activeIndex + 1]);
 
   /** After a verdict, jump straight to the next item in the queue (or close if done). */
   function advanceAfterVerdict() {
-    const nextItem = reviews[activeIndex + 1] ?? null;
+    const nextItem = visibleReviews[activeIndex + 1] ?? null;
     if (nextItem) open(nextItem);
     else setActiveId(null);
     router.refresh();
@@ -102,10 +157,54 @@ export function ReviewClient({
     <div>
       <h1 className="text-2xl font-semibold tracking-tight text-foreground">Review</h1>
       <p className="mt-1 text-sm text-muted-foreground">
-        {reviews.length} submission{reviews.length === 1 ? "" : "s"} awaiting review.
+        {visibleReviews.length}
+        {isFiltered ? ` of ${reviews.length}` : ""} submission{reviews.length === 1 ? "" : "s"} awaiting review.
       </p>
 
-      <div className="mt-6 overflow-x-auto rounded-2xl border border-border bg-card">
+      <div className="mt-4 grid grid-cols-1 gap-3 rounded-2xl border border-border bg-card p-5 sm:grid-cols-2 lg:grid-cols-4">
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">Sort by</label>
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+            className="h-11 w-full rounded-xl border border-transparent bg-input px-3 text-sm text-foreground focus:border-primary focus:bg-background focus:outline-none"
+          >
+            <option value="oldest">Oldest first</option>
+            <option value="newest">Newest first</option>
+            <option value="ai_desc">AI score: high to low</option>
+            <option value="ai_asc">AI score: low to high</option>
+          </select>
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">Campaign</label>
+          <MultiSelect
+            options={campaignOptions}
+            selected={filterCampaignIds}
+            onChange={setFilterCampaignIds}
+            placeholder="All campaigns"
+          />
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">Department</label>
+          <MultiSelect
+            options={departmentOptions}
+            selected={filterDeptIds}
+            onChange={setFilterDeptIds}
+            placeholder="All departments"
+          />
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">Store</label>
+          <MultiSelect
+            options={storeOptions}
+            selected={filterStoreIds}
+            onChange={setFilterStoreIds}
+            placeholder="All stores"
+          />
+        </div>
+      </div>
+
+      <div className="mt-4 overflow-x-auto rounded-2xl border border-border bg-card">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
@@ -121,12 +220,12 @@ export function ReviewClient({
             </tr>
           </thead>
           <tbody>
-            {reviews.map((r) => (
+            {visibleReviews.map((r) => (
               <tr key={r.id} className="border-b border-border last:border-0">
                 <td className="px-4 py-3 font-medium text-foreground">{r.campaignName}</td>
                 <td className="px-4 py-3 text-muted-foreground">{r.storeName}</td>
                 <td className="px-4 py-3 text-muted-foreground">{r.submittedByName ?? "—"}</td>
-                <td className="px-4 py-3 text-muted-foreground">{r.departmentName ?? "—"}</td>
+                <td className="px-4 py-3 text-muted-foreground">{r.departmentNames.join(", ") || "—"}</td>
                 <td className="px-4 py-3 text-muted-foreground">
                   {(isAdmin || r.aiScoreVisible) && r.aiScore != null ? `${r.aiScore}/10` : "—"}
                 </td>
@@ -182,10 +281,10 @@ export function ReviewClient({
                 </td>
               </tr>
             ))}
-            {reviews.length === 0 && (
+            {visibleReviews.length === 0 && (
               <tr>
                 <td colSpan={9} className="p-10 text-center text-sm text-muted-foreground">
-                  Nothing to review right now. 🎉
+                  {isFiltered ? "No submissions match these filters." : "Nothing to review right now. 🎉"}
                 </td>
               </tr>
             )}
@@ -215,12 +314,12 @@ export function ReviewClient({
                   <ChevronLeft className="h-4 w-4" />
                 </button>
                 <span className="px-1 text-xs font-medium text-muted-foreground">
-                  {activeIndex + 1} of {reviews.length}
+                  {activeIndex + 1} of {visibleReviews.length}
                 </span>
                 <button
                   type="button"
                   onClick={goNext}
-                  disabled={activeIndex >= reviews.length - 1}
+                  disabled={activeIndex >= visibleReviews.length - 1}
                   aria-label="Next submission"
                   className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
                 >
