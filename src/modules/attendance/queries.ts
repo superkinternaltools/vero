@@ -212,8 +212,8 @@ export async function listRosters(scope: { userId: string; isAdmin: boolean }): 
 }
 
 async function listStoreOptions(admin: ReturnType<typeof createAdminClient>) {
-  const { data } = await admin.from("stores").select("id, code, name").is("deleted_at", null).order("code");
-  return ((data as any[]) ?? []).map((s) => ({ id: s.id, label: `${s.code} — ${s.name}` }));
+  const { data } = await admin.from("stores").select("id, name").is("deleted_at", null).order("name");
+  return ((data as any[]) ?? []).map((s) => ({ id: s.id, label: s.name }));
 }
 
 /** Stores for pickers outside the roster grid (e.g. the New roster modal's
@@ -327,7 +327,7 @@ export async function getRosterGrid(
     admin.from("attendance_roster_members").select("user_id, profiles ( display_name, email )").eq("roster_id", rosterId),
     admin
       .from("attendance_assignments")
-      .select("id, user_id, work_date, preset_id, mode, windows, store_id, stores ( code, name ), attendance_shift_presets ( name )")
+      .select("id, user_id, work_date, preset_id, mode, windows, store_id, stores ( name ), attendance_shift_presets ( name )")
       .eq("roster_id", rosterId)
       .gte("work_date", rangeStart)
       .lte("work_date", rangeEnd)
@@ -358,7 +358,7 @@ export async function getRosterGrid(
       mode,
       windows: wins,
       storeId: a.store_id,
-      storeName: a.stores ? `${a.stores.code}` : "—",
+      storeName: a.stores?.name ?? "—",
     });
     cells[a.user_id][a.work_date] = list;
   }
@@ -477,7 +477,7 @@ export async function getAttendanceLog(
   const [{ data: assigns }, { data: punches }] = await Promise.all([
     admin
       .from("attendance_assignments")
-      .select("id, user_id, work_date, mode, windows, store_id, roster_id, stores ( code, name ), profiles ( display_name, email ), attendance_rosters ( overtime_cap_hours )")
+      .select("id, user_id, work_date, mode, windows, store_id, roster_id, stores ( name ), profiles ( display_name, email ), attendance_rosters ( overtime_cap_hours )")
       .eq("work_date", dateISO),
     admin
       .from("attendance_punches")
@@ -540,7 +540,7 @@ export async function getAttendanceLog(
       userId: a.user_id,
       name: a.profiles?.display_name || a.profiles?.email || "—",
       storeId: a.store_id,
-      storeName: a.stores ? `${a.stores.code}` : "—",
+      storeName: a.stores?.name ?? "—",
       roleIds: [...(personRoleMap.get(a.user_id) ?? [])],
       departmentIds: [...(personDeptMap.get(a.user_id) ?? [])],
       shiftLabel,
@@ -687,7 +687,7 @@ export async function getWeeklyAnalysis(
 
 // ── punch context (for the punch screen) ────────────────────────────────────
 const ASSIGNMENT_SELECT =
-  "id, roster_id, work_date, mode, windows, store_id, stores ( code, name ), attendance_shift_presets ( mid_photo_min )";
+  "id, roster_id, work_date, mode, windows, store_id, stores ( name ), attendance_shift_presets ( mid_photo_min )";
 
 export async function getPunchContext(userId: string, dateISO?: string): Promise<PunchContext> {
   const admin = createAdminClient();
@@ -721,7 +721,7 @@ export async function getPunchContext(userId: string, dateISO?: string): Promise
       workDate: a.work_date,
       carriedOver,
       storeId: a.store_id,
-      storeName: a.stores ? `${a.stores.code} — ${a.stores.name}` : "—",
+      storeName: a.stores?.name ?? "—",
       mode: a.mode === "open" ? "open" : "fixed",
       windows: Array.isArray(a.windows) ? (a.windows as ShiftWindow[]) : [],
       midPhotoMin: a.attendance_shift_presets?.mid_photo_min ?? 0,
