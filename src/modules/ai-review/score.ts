@@ -12,7 +12,7 @@ export async function scoreSubmission(submissionId: string): Promise<void> {
   const supabase = createAdminClient();
   const { data: sub } = await supabase
     .from("submissions")
-    .select("id, task_id, photos, campaign_id")
+    .select("id, task_id, photos, campaign_id, human_verdict")
     .eq("id", submissionId)
     .maybeSingle();
   if (!sub) return;
@@ -76,7 +76,10 @@ export async function scoreSubmission(submissionId: string): Promise<void> {
     ai_assessment: result.assessment,
   };
 
-  if (campaign.score_mode === "ai_auto_approve") {
+  // A human verdict already on record is final — auto-approve exists to
+  // stand in for an absent human decision, never to overwrite one (e.g.
+  // when backfilling AI scores onto submissions a reviewer already decided).
+  if (campaign.score_mode === "ai_auto_approve" && !(sub as any).human_verdict) {
     if (matchedTier) {
       update.payout_tier_label = matchedTier.label;
       update.human_verdict = matchedTier.pct > 0 ? "approved" : "rejected";
