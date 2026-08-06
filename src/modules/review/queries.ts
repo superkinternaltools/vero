@@ -1,4 +1,6 @@
+import { createClient } from "@/core/db/server";
 import { createAdminClient } from "@/core/db/admin";
+import { getAllowedCampaignIdsForUser } from "@/core/auth/campaign-scope";
 import type { PayoutTier } from "@/modules/campaigns/types";
 
 // Admin client used so reviewers (non-admin) can read the review queue.
@@ -28,13 +30,22 @@ export type ReviewRow = {
   payoutTiers: PayoutTier[];
 };
 
-export async function listPendingReviews(): Promise<ReviewRow[]> {
-  const supabase = createAdminClient();
-  const { data } = await supabase
+export async function listPendingReviews(scope: {
+  userId: string;
+  isAdmin: boolean;
+}): Promise<ReviewRow[]> {
+  let allowedCampaignIds: Set<string> | null = null;
+  if (!scope.isAdmin) {
+    const supabase = await createClient();
+    allowedCampaignIds = new Set(await getAllowedCampaignIdsForUser(supabase, scope.userId));
+  }
+
+  const admin = createAdminClient();
+  const { data } = await admin
     .from("submissions")
     .select(
       `
-      id, created_at, photos, comments, ai_score, ai_verdict, ai_assessment,
+      id, campaign_id, created_at, photos, comments, ai_score, ai_verdict, ai_assessment,
       geofence_flag, geofence_distance_m, duplicate_flag, no_location_flag,
       campaigns ( name, ai_score_visible, reference_images, payout_model, payout_tiers,
                   campaign_departments ( departments ( name ) ) ),
@@ -45,7 +56,11 @@ export async function listPendingReviews(): Promise<ReviewRow[]> {
     .eq("status", "pending_review")
     .order("created_at", { ascending: true });
 
-  return ((data as any[]) ?? []).map((row): ReviewRow => ({
+  const rows = ((data as any[]) ?? []).filter(
+    (row) => !allowedCampaignIds || allowedCampaignIds.has(row.campaign_id),
+  );
+
+  return rows.map((row): ReviewRow => ({
     id: row.id,
     campaignName: row.campaigns?.name ?? "—",
     storeName: row.stores?.name ?? "—",

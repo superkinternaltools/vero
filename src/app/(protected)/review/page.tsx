@@ -5,10 +5,10 @@ import { ReviewClient } from "@/modules/review/components/review-client";
 
 export default async function ReviewPage() {
   await requireAccess("review");
-  const [reviews, rejectionReasons, profile] = await Promise.all([
-    listPendingReviews(),
+  const profile = await getCurrentProfile();
+  const [reviews, rejectionReasons] = await Promise.all([
+    listPendingReviews({ userId: profile?.id ?? "", isAdmin: !!profile?.is_admin }),
     listRejectionReasons(),
-    getCurrentProfile(),
   ]);
   return (
     <ReviewClient

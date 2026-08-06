@@ -1,5 +1,6 @@
 import { createClient } from "@/core/db/server";
 import { createAdminClient } from "@/core/db/admin";
+import { getAllowedCampaignIdsForUser } from "@/core/auth/campaign-scope";
 import type { PayoutTier } from "@/modules/campaigns/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -49,53 +50,6 @@ export type Matrix = {
   cycles: string[];
   cells: Record<string, Record<string, CellData>>;
 };
-
-/** Campaign IDs visible to this user: campaigns targeting BOTH one of their
- * assigned stores AND one of their assigned departments (a campaign with no
- * department tagged at all is treated as visible to everyone, since
- * departments were never a required field on a campaign). No stores
- * assigned means nothing can match, so an empty list is returned. */
-async function getAllowedCampaignIdsForUser(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  userId: string,
-): Promise<string[]> {
-  const [{ data: us }, { data: ud }] = await Promise.all([
-    supabase.from("user_stores").select("store_id").eq("user_id", userId),
-    supabase.from("user_departments").select("department_id").eq("user_id", userId),
-  ]);
-  const storeIds = new Set(((us as any[]) ?? []).map((r) => r.store_id as string));
-  const deptIds = new Set(((ud as any[]) ?? []).map((r) => r.department_id as string));
-  if (storeIds.size === 0) return [];
-
-  const [{ data: campaigns }, { data: cs }, { data: cd }] = await Promise.all([
-    supabase.from("campaigns").select("id").is("deleted_at", null),
-    supabase.from("campaign_stores").select("campaign_id, store_id"),
-    supabase.from("campaign_departments").select("campaign_id, department_id"),
-  ]);
-
-  const campaignStores = new Map<string, string[]>();
-  for (const row of (cs as any[]) ?? []) {
-    const arr = campaignStores.get(row.campaign_id) ?? [];
-    arr.push(row.store_id);
-    campaignStores.set(row.campaign_id, arr);
-  }
-  const campaignDepts = new Map<string, string[]>();
-  for (const row of (cd as any[]) ?? []) {
-    const arr = campaignDepts.get(row.campaign_id) ?? [];
-    arr.push(row.department_id);
-    campaignDepts.set(row.campaign_id, arr);
-  }
-
-  return ((campaigns as any[]) ?? [])
-    .map((c) => c.id as string)
-    .filter((id) => {
-      const storeTags = campaignStores.get(id) ?? [];
-      const deptTags = campaignDepts.get(id) ?? [];
-      const storeMatch = storeTags.some((s) => storeIds.has(s));
-      const deptMatch = deptTags.length === 0 || deptTags.some((d) => deptIds.has(d));
-      return storeMatch && deptMatch;
-    });
-}
 
 export async function listCampaignOptions(scope: {
   userId: string;
