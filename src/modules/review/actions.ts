@@ -111,3 +111,27 @@ export async function rejectSubmission(id: string, reason: string): Promise<Resu
   revalidatePath("/tasks");
   return {};
 }
+
+type BulkResult = { scored: number; failed: number };
+
+/** Loops the exact same single-item action (auth check + task-status update
+ * included) rather than reimplementing it — tiered submissions are excluded
+ * by the caller before this ever runs, since a bulk action can't pick a
+ * specific tier per row. */
+export async function bulkApproveSubmissions(ids: string[]): Promise<BulkResult> {
+  let failed = 0;
+  for (const id of ids) {
+    const res = await approveSubmission(id);
+    if (res.error) failed += 1;
+  }
+  return { scored: ids.length - failed, failed };
+}
+
+export async function bulkRejectSubmissions(ids: string[], reason: string): Promise<BulkResult> {
+  let failed = 0;
+  for (const id of ids) {
+    const res = await rejectSubmission(id, reason);
+    if (res.error) failed += 1;
+  }
+  return { scored: ids.length - failed, failed };
+}

@@ -8,7 +8,20 @@ import { MultiSelect } from "@/core/ui/multi-select";
 import { cn } from "@/core/lib/utils";
 import type { ReviewRow } from "../queries";
 import type { PayoutTier } from "@/modules/campaigns/types";
-import { approveSubmission, rejectSubmission, selectPayoutTier } from "../actions";
+import {
+  approveSubmission,
+  rejectSubmission,
+  selectPayoutTier,
+  bulkApproveSubmissions,
+  bulkRejectSubmissions,
+} from "../actions";
+
+const FLAG_OPTIONS = [
+  { id: "geofence", label: "Geofence issue" },
+  { id: "duplicate", label: "Duplicate photo" },
+  { id: "no_location", label: "No location" },
+];
+const AI_VERDICT_NONE = "__none__";
 
 function verdictCls(verdict: string, payoutModel: string, tiers: PayoutTier[]): string {
   if (payoutModel === "tiered") {
@@ -25,6 +38,16 @@ function verdictCls(verdict: string, payoutModel: string, tiers: PayoutTier[]): 
 function aiSuggestedTier(score: number | null, tiers: PayoutTier[]): PayoutTier | null {
   if (score == null || tiers.length === 0) return null;
   return tiers.find((t) => score >= t.min_score && score <= t.max_score) ?? null;
+}
+
+/** The AI verdict text as actually shown in the table/modal — tiered
+ * campaigns display the AI-suggested tier label, not the raw ai_verdict
+ * field. Hidden-for-this-reviewer campaigns return null so the filter can't
+ * be used to infer a verdict the UI otherwise conceals. */
+function displayVerdict(r: ReviewRow, isAdmin: boolean): string | null {
+  if (!isAdmin && !r.aiScoreVisible) return null;
+  if (r.payoutModel === "tiered") return aiSuggestedTier(r.aiScore, r.payoutTiers)?.label ?? null;
+  return r.aiVerdict;
 }
 
 function fmt(ts: string) {
@@ -56,6 +79,13 @@ export function ReviewClient({
   const [filterCampaignIds, setFilterCampaignIds] = useState<string[]>([]);
   const [filterDeptIds, setFilterDeptIds] = useState<string[]>([]);
   const [filterStoreIds, setFilterStoreIds] = useState<string[]>([]);
+  const [filterAiVerdicts, setFilterAiVerdicts] = useState<string[]>([]);
+  const [filterFlags, setFilterFlags] = useState<string[]>([]);
+
+  // ── Bulk selection ───────────────────────────────────────────────────────
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkRejectReason, setBulkRejectReason] = useState("");
+  const [bulkError, setBulkError] = useState<string | null>(null);
 
   const campaignOptions = useMemo(() => {
     const map = new Map<string, string>();
@@ -81,13 +111,43 @@ export function ReviewClient({
       .sort((a, b) => a.label.localeCompare(b.label));
   }, [reviews]);
 
-  const isFiltered = filterCampaignIds.length > 0 || filterDeptIds.length > 0 || filterStoreIds.length > 0;
+  const aiVerdictOptions = useMemo(() => {
+    const labels = new Set<string>();
+    let hasUnscored = false;
+    for (const r of reviews) {
+      const v = displayVerdict(r, isAdmin);
+      if (v) labels.add(v);
+      else if (r.aiScore == null) hasUnscored = true;
+    }
+    const opts = [...labels].sort().map((label) => ({ id: label, label }));
+    if (hasUnscored) opts.push({ id: AI_VERDICT_NONE, label: "Not yet scored" });
+    return opts;
+  }, [reviews, isAdmin]);
+
+  const isFiltered =
+    filterCampaignIds.length > 0 ||
+    filterDeptIds.length > 0 ||
+    filterStoreIds.length > 0 ||
+    filterAiVerdicts.length > 0 ||
+    filterFlags.length > 0;
 
   const visibleReviews = useMemo(() => {
     const list = reviews.filter((r) => {
       if (filterCampaignIds.length && !filterCampaignIds.includes(r.campaignId)) return false;
       if (filterStoreIds.length && !filterStoreIds.includes(r.storeId)) return false;
       if (filterDeptIds.length && !r.departmentIds.some((d) => filterDeptIds.includes(d))) return false;
+      if (filterAiVerdicts.length) {
+        const v = displayVerdict(r, isAdmin) ?? AI_VERDICT_NONE;
+        if (!filterAiVerdicts.includes(v)) return false;
+      }
+      if (filterFlags.length) {
+        const rowFlags = [
+          r.geofenceFlag && "geofence",
+          r.duplicateFlag && "duplicate",
+          r.noLocationFlag && "no_location",
+        ].filter(Boolean) as string[];
+        if (!filterFlags.some((f) => rowFlags.includes(f))) return false;
+      }
       return true;
     });
     return list.slice().sort((a, b) => {
@@ -103,7 +163,7 @@ export function ReviewClient({
           return a.submittedAt.localeCompare(b.submittedAt);
       }
     });
-  }, [reviews, filterCampaignIds, filterDeptIds, filterStoreIds, sortBy]);
+  }, [reviews, filterCampaignIds, filterDeptIds, filterStoreIds, filterAiVerdicts, filterFlags, isAdmin, sortBy]);
 
   const activeIndex = visibleReviews.findIndex((r) => r.id === activeId);
   const active = activeIndex >= 0 ? visibleReviews[activeIndex] : null;
@@ -153,6 +213,59 @@ export function ReviewClient({
     });
   }
 
+  // ── Bulk selection ───────────────────────────────────────────────────────
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllVisible() {
+    const allSelected = visibleReviews.length > 0 && visibleReviews.every((r) => selectedIds.has(r.id));
+    setSelectedIds(allSelected ? new Set() : new Set(visibleReviews.map((r) => r.id)));
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+    setBulkRejectReason("");
+    setBulkError(null);
+  }
+
+  // Tiered submissions need a specific tier picked per row — can't be bulk
+  // approved/rejected as generic full/zero without losing that granularity,
+  // so they're excluded here and left for individual review.
+  const selectedRows = visibleReviews.filter((r) => selectedIds.has(r.id));
+  const selectedBinaryIds = selectedRows.filter((r) => r.payoutModel !== "tiered").map((r) => r.id);
+  const selectedTieredCount = selectedRows.length - selectedBinaryIds.length;
+
+  function applyBulkApprove() {
+    if (!selectedBinaryIds.length) return;
+    setBulkError(null);
+    start(async () => {
+      const res = await bulkApproveSubmissions(selectedBinaryIds);
+      if (res.failed) setBulkError(`${res.failed} of ${selectedBinaryIds.length} failed to approve.`);
+      clearSelection();
+      router.refresh();
+    });
+  }
+
+  function applyBulkReject() {
+    if (!selectedBinaryIds.length) return;
+    if (!bulkRejectReason) {
+      setBulkError("Pick a rejection reason.");
+      return;
+    }
+    setBulkError(null);
+    start(async () => {
+      const res = await bulkRejectSubmissions(selectedBinaryIds, bulkRejectReason);
+      if (res.failed) setBulkError(`${res.failed} of ${selectedBinaryIds.length} failed to reject.`);
+      clearSelection();
+      router.refresh();
+    });
+  }
+
   return (
     <div>
       <h1 className="text-2xl font-semibold tracking-tight text-foreground">Review</h1>
@@ -161,7 +274,7 @@ export function ReviewClient({
         {isFiltered ? ` of ${reviews.length}` : ""} submission{reviews.length === 1 ? "" : "s"} awaiting review.
       </p>
 
-      <div className="mt-4 grid grid-cols-1 gap-3 rounded-2xl border border-border bg-card p-5 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mt-4 grid grid-cols-1 gap-3 rounded-2xl border border-border bg-card p-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <div>
           <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">Sort by</label>
           <select
@@ -202,12 +315,38 @@ export function ReviewClient({
             placeholder="All stores"
           />
         </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">AI Verdict</label>
+          <MultiSelect
+            options={aiVerdictOptions}
+            selected={filterAiVerdicts}
+            onChange={setFilterAiVerdicts}
+            placeholder="All verdicts"
+          />
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">Flags</label>
+          <MultiSelect
+            options={FLAG_OPTIONS}
+            selected={filterFlags}
+            onChange={setFilterFlags}
+            placeholder="All flags"
+          />
+        </div>
       </div>
 
       <div className="mt-4 overflow-x-auto rounded-2xl border border-border bg-card">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+              <th className="w-10 px-4 py-3">
+                <input
+                  type="checkbox"
+                  checked={visibleReviews.length > 0 && visibleReviews.every((r) => selectedIds.has(r.id))}
+                  onChange={toggleSelectAllVisible}
+                  className="h-4 w-4 cursor-pointer rounded accent-primary"
+                />
+              </th>
               <th className="px-4 py-3 font-semibold">Campaign</th>
               <th className="px-4 py-3 font-semibold">Store</th>
               <th className="px-4 py-3 font-semibold">Uploaded by</th>
@@ -222,6 +361,14 @@ export function ReviewClient({
           <tbody>
             {visibleReviews.map((r) => (
               <tr key={r.id} className="border-b border-border last:border-0">
+                <td className="px-4 py-3">
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(r.id)}
+                    onChange={() => toggleSelect(r.id)}
+                    className="h-4 w-4 cursor-pointer rounded accent-primary"
+                  />
+                </td>
                 <td className="px-4 py-3 font-medium text-foreground">{r.campaignName}</td>
                 <td className="px-4 py-3 text-muted-foreground">{r.storeName}</td>
                 <td className="px-4 py-3 text-muted-foreground">{r.submittedByName ?? "—"}</td>
@@ -283,7 +430,7 @@ export function ReviewClient({
             ))}
             {visibleReviews.length === 0 && (
               <tr>
-                <td colSpan={9} className="p-10 text-center text-sm text-muted-foreground">
+                <td colSpan={10} className="p-10 text-center text-sm text-muted-foreground">
                   {isFiltered ? "No submissions match these filters." : "Nothing to review right now. 🎉"}
                 </td>
               </tr>
@@ -291,6 +438,57 @@ export function ReviewClient({
           </tbody>
         </table>
       </div>
+
+      {/* ── Floating bulk action bar ── */}
+      {selectedIds.size > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-border bg-card shadow-lg md:left-64">
+          <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-5 py-3">
+            <span className="text-sm font-medium text-foreground">
+              {selectedIds.size} selected
+              {selectedTieredCount > 0 && (
+                <span className="ml-1 font-normal text-muted-foreground">
+                  ({selectedTieredCount} tiered — review individually)
+                </span>
+              )}
+            </span>
+
+            <Button size="md" onClick={applyBulkApprove} disabled={pending || selectedBinaryIds.length === 0}>
+              Approve {selectedBinaryIds.length}
+            </Button>
+
+            <div className="flex items-center gap-1.5">
+              <select
+                value={bulkRejectReason}
+                onChange={(e) => setBulkRejectReason(e.target.value)}
+                className="h-10 rounded-xl border border-border bg-input px-3 text-sm text-foreground focus:border-primary focus:outline-none"
+              >
+                <option value="">Rejection reason…</option>
+                {rejectionReasons.map((r) => (
+                  <option key={r.id} value={r.name}>{r.name}</option>
+                ))}
+              </select>
+              <Button
+                variant="outline"
+                size="md"
+                onClick={applyBulkReject}
+                disabled={pending || selectedBinaryIds.length === 0 || !bulkRejectReason}
+              >
+                Reject {selectedBinaryIds.length}
+              </Button>
+            </div>
+
+            {bulkError && <p className="text-sm font-medium text-danger">{bulkError}</p>}
+
+            <button
+              onClick={clearSelection}
+              aria-label="Clear selection"
+              className="ml-auto rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {active && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
