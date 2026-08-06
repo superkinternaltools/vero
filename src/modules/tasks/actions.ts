@@ -200,6 +200,27 @@ export async function markNonSubmission(
   return {};
 }
 
+/** Self-service undo of "Can't do it" — puts the task back to pending so the
+ * field user can upload proof after all. Scoped to only-ever-transition a
+ * not_done task (can't be used to reset anything else), same minimal-check
+ * pattern as markNonSubmission — relies on RLS for store scoping. */
+export async function resubmitTask(taskId: string): Promise<{ error?: string }> {
+  const me = await getCurrentProfile();
+  if (!me) return { error: "Not signed in." };
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("tasks")
+    .update({ status: "pending", non_submission_reason: null, non_submission_acknowledged: false })
+    .eq("id", taskId)
+    .eq("status", "not_done");
+  if (error) return { error: error.message };
+
+  revalidatePath("/tasks");
+  revalidatePath("/summary");
+  return {};
+}
+
 export async function deleteTask(taskId: string): Promise<{ error?: string }> {
   const me = await getCurrentProfile();
   if (!me?.is_admin) return { error: "Only admins can delete tasks." };

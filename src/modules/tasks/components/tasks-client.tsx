@@ -23,7 +23,7 @@ import { Button } from "@/core/ui/button";
 import { createClient } from "@/core/db/client";
 import { cn } from "@/core/lib/utils";
 import type { TaskRow } from "../types";
-import { submitProof, markNonSubmission, deleteTask } from "../actions";
+import { submitProof, markNonSubmission, resubmitTask, deleteTask } from "../actions";
 
 const PAGE_SIZE = 15;
 
@@ -246,6 +246,15 @@ export function TasksClient({
     });
   }
 
+  function resubmit(t: TaskRow) {
+    if (!window.confirm(`Resubmit "${t.campaignName}"? It will go back to Pending so you can upload proof.`)) return;
+    start(async () => {
+      const res = await resubmitTask(t.id);
+      if (res?.error) window.alert(res.error);
+      router.refresh();
+    });
+  }
+
   function remove(t: TaskRow) {
     if (!window.confirm(`Delete this task for "${t.campaignName}" at ${t.storeName}?`)) return;
     start(async () => {
@@ -404,6 +413,11 @@ export function TasksClient({
               {t.nonSubmissionReason && (
                 <p className="mt-2 text-xs text-muted-foreground">Reason: {t.nonSubmissionReason}</p>
               )}
+              <div className="mt-3">
+                <Button variant="outline" className="w-full" size="md" onClick={() => resubmit(t)} disabled={pending}>
+                  Resubmit
+                </Button>
+              </div>
             </div>
           ))}
           {notDoneTasks.length === 0 && (
@@ -439,22 +453,19 @@ export function TasksClient({
                   <p className="text-xs font-medium text-danger">{t.rejectionReason}</p>
                 </div>
               )}
-              <div className="mt-3">
-                {t.status === "rejected" ? (
-                  <Button variant="outline" className="w-full" size="md" onClick={() => open(t)}>
-                    Re-upload
-                  </Button>
-                ) : (
-                  <div className="text-center">
-                    <button
-                      type="button"
-                      onClick={() => setViewTask(t)}
-                      className="text-xs text-muted-foreground underline hover:text-foreground"
-                    >
-                      View submitted photo
-                    </button>
-                  </div>
-                )}
+              <div className="mt-3 space-y-2">
+                <Button variant="outline" className="w-full" size="md" onClick={() => open(t)}>
+                  Re-upload
+                </Button>
+                <div className="text-center">
+                  <button
+                    type="button"
+                    onClick={() => setViewTask(t)}
+                    className="text-xs text-muted-foreground underline hover:text-foreground"
+                  >
+                    View submitted photo
+                  </button>
+                </div>
               </div>
             </div>
           ))}
@@ -522,7 +533,11 @@ export function TasksClient({
           <div className="relative z-10 max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-border bg-card p-6 shadow-xl">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-semibold text-foreground">
-                {active.status === "rejected" ? "Re-upload Execution Photo" : active.status === "approved" ? "Re-submit Execution Photo" : "Upload Execution Photo"}
+                {active.status === "rejected" || active.status === "submitted"
+                  ? "Re-upload Execution Photo"
+                  : active.status === "approved"
+                  ? "Re-submit Execution Photo"
+                  : "Upload Execution Photo"}
               </h2>
               <button type="button" onClick={() => setActive(null)} aria-label="Close" className="rounded-lg p-1 text-muted-foreground hover:bg-muted">
                 <X className="h-4 w-4" />
