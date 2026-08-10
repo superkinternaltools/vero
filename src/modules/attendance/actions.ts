@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/core/db/server";
 import { createAdminClient } from "@/core/db/admin";
 import { getCurrentProfile } from "@/core/auth/session";
+import { getAccess } from "@/core/auth/access";
 import { distanceMeters } from "@/core/lib/geo";
 import type { ShiftMode, ShiftWindow } from "./types";
 
@@ -483,6 +484,8 @@ export async function recordPunch(input: {
 }): Promise<Result> {
   const me = await getCurrentProfile();
   if (!me) return { error: "Not signed in." };
+  const access = await getAccess();
+  if (!access?.allowed.includes("attendance_punch")) return { error: "Not authorized." };
   if (!input.photoPath) return { error: "A photo is required." };
 
   const admin = createAdminClient();

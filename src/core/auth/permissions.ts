@@ -10,6 +10,7 @@ export const PERMISSION_KEYS = [
   { key: "leaderboard", label: "Leaderboard" },
   { key: "contest_impact", label: "Contest Impact" },
   { key: "attendance", label: "Attendance" },
+  { key: "attendance_punch", label: "Attendance Punch" },
   { key: "stores", label: "Stores" },
   { key: "users", label: "Users" },
   { key: "org", label: "Roles & Departments" },
