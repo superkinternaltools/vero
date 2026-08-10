@@ -105,6 +105,31 @@ export async function updateCampaign(id: string, v: CampaignFormValues): Promise
   return { id };
 }
 
+type BulkResult = { updated: number; failed: number };
+
+/** Status-only bulk update — deliberately NOT routed through updateCampaign,
+ * which requires the full form object and would wipe a campaign's stores/
+ * departments/job-titles if called with anything less. */
+export async function bulkSetCampaignStatus(ids: string[], status: string): Promise<BulkResult> {
+  if (!ids.length) return { updated: 0, failed: 0 };
+  const supabase = await createClient();
+  const { error } = await supabase.from("campaigns").update({ status }).in("id", ids);
+  if (error) return { updated: 0, failed: ids.length };
+
+  let failed = 0;
+  for (const id of ids) {
+    try {
+      if (status === "active") await autoGenerateTasks(id);
+      else await purgePendingTasks(id);
+    } catch {
+      failed += 1;
+    }
+  }
+  revalidatePath("/campaigns");
+  revalidatePath("/tasks");
+  return { updated: ids.length, failed };
+}
+
 export async function duplicateCampaign(formData: FormData): Promise<void> {
   const { redirect } = await import("next/navigation");
   const id = String(formData.get("id"));
