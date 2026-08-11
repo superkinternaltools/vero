@@ -2,10 +2,35 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Download } from "lucide-react";
+import { Download, Images } from "lucide-react";
 import { Button } from "@/core/ui/button";
 import { MultiSelect } from "@/core/ui/multi-select";
-import type { CampaignOption, DepartmentOption, ExportGroupRow } from "../types";
+import { getPhotoManifest } from "../actions";
+import type { CampaignOption, DepartmentOption, ExportGroupRow, PhotoExportItem } from "../types";
+
+/** File System Access API — Chrome and Edge only, so it isn't in the TS lib
+ * types. Only the bits used below are declared. */
+type SaveFilePicker = (opts: {
+  suggestedName?: string;
+  types?: { description?: string; accept: Record<string, string[]> }[];
+}) => Promise<{ createWritable: () => Promise<WritableStream<Uint8Array>> }>;
+
+/** Strips characters that break folder/file names on Windows and macOS. */
+function safeName(s: string): string {
+  return s.replace(/[/\\:*?"<>|]/g, "-").replace(/\s+/g, " ").trim() || "Unnamed";
+}
+
+function extFromUrl(url: string): string {
+  const m = url.split("?")[0].match(/\.([a-zA-Z0-9]{2,5})$/);
+  return m ? m[1].toLowerCase() : "jpg";
+}
+
+/** "Cool Drink - July - 2026-07 W2_approved.jpg" — campaign, when, and verdict,
+ * with an index only when one submission carried several photos. */
+function photoFileName(it: PhotoExportItem): string {
+  const suffix = it.photoCount > 1 ? ` (${it.photoIndex})` : "";
+  return `${safeName(it.campaignName)} - ${it.month} W${it.week}_${safeName(it.verdict)}${suffix}.${extFromUrl(it.url)}`;
+}
 
 function downloadCsv(filename: string, header: string[], rows: (string | number)[][]) {
   const lines = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","));
@@ -47,6 +72,13 @@ export function ExportClient({
   const [campaignIds, setCampaignIds] = useState<string[]>([]);
   const [activeOnly, setActiveOnly] = useState(false);
   const [departmentIds, setDepartmentIds] = useState<string[]>([]);
+
+  // ── Photo zip ────────────────────────────────────────────────────────────
+  const [photoFrom, setPhotoFrom] = useState(month);
+  const [photoTo, setPhotoTo] = useState(month);
+  const [zipping, setZipping] = useState(false);
+  const [zipStatus, setZipStatus] = useState<string | null>(null);
+  const [zipError, setZipError] = useState<string | null>(null);
 
   function navigateMonth(next: string) {
     startTransition(() => router.replace(`/export?month=${next}`, { scroll: false }));
@@ -113,6 +145,93 @@ export function ExportClient({
         r.recordedTierLabel ?? "",
       ]),
     );
+  }
+
+  async function downloadPhotos() {
+    setZipError(null);
+    if (campaignIds.length === 0) {
+      setZipError("Pick the campaigns you want photos for, above.");
+      return;
+    }
+    const months = photoFrom === photoTo ? [photoFrom] : [photoFrom, photoTo].sort();
+    setZipping(true);
+    setZipStatus("Building the list…");
+    try {
+      const res = await getPhotoManifest(months, campaignIds);
+      if (res.error) {
+        setZipError(res.error);
+        return;
+      }
+      const items = res.items ?? [];
+      if (items.length === 0) {
+        setZipError("No photos found for those campaigns and months.");
+        return;
+      }
+
+      const { downloadZip } = await import("client-zip");
+      const suggestedName = `photos-${months.join("-and-")}.zip`;
+      let done = 0;
+      let failed = 0;
+
+      // Each photo is fetched and handed to the zip encoder one at a time, so
+      // only the photo in flight is ever in memory. Buffering them all is what
+      // blew up before — a couple of months of photos is far more than a tab
+      // can hold at once.
+      async function* zipEntries() {
+        for (const it of items) {
+          try {
+            const r = await fetch(it.url);
+            if (!r.ok) throw new Error(String(r.status));
+            yield {
+              name: `${safeName(it.storeName)}/${photoFileName(it)}`,
+              input: r,
+            };
+          } catch {
+            failed += 1;
+          }
+          done += 1;
+          setZipStatus(`${done} of ${items.length} photos…`);
+        }
+      }
+
+      const picker = (window as unknown as { showSaveFilePicker?: SaveFilePicker }).showSaveFilePicker;
+
+      if (picker) {
+        // Streams straight to the file the user picks — no size ceiling.
+        const handle = await picker({
+          suggestedName,
+          types: [{ description: "Zip archive", accept: { "application/zip": [".zip"] } }],
+        });
+        const writable = await handle.createWritable();
+        const body = downloadZip(zipEntries()).body;
+        if (!body) throw new Error("Couldn't start the download stream.");
+        await body.pipeTo(writable);
+      } else {
+        // Safari and Firefox have no save-picker, so fall back to holding the
+        // zip in memory. Fine for a few hundred photos, not thousands.
+        const blob = await downloadZip(zipEntries()).blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = suggestedName;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+
+      setZipStatus(
+        failed > 0
+          ? `Done — ${done - failed} photos, ${failed} couldn't be downloaded.`
+          : `Done — ${done} photos.`,
+      );
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        setZipStatus(null);
+        return;
+      }
+      setZipError(err instanceof Error ? err.message : "Something went wrong building the zip.");
+    } finally {
+      setZipping(false);
+    }
   }
 
   return (
@@ -209,11 +328,45 @@ export function ExportClient({
           </Button>
         </div>
 
-        <div className="rounded-2xl border border-dashed border-border bg-card p-5 opacity-60">
-          <h3 className="text-sm font-semibold text-foreground">More coming soon</h3>
-          <p className="mt-1 text-xs text-muted-foreground">A third export — let me know what it should cover.</p>
-          <Button className="mt-4 w-full" variant="outline" disabled>
-            <Download className="h-4 w-4" /> Export CSV
+        <div className="rounded-2xl border border-border bg-card p-5">
+          <h3 className="text-sm font-semibold text-foreground">Submission photos</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            A zip with one folder per store. Photos named by campaign, week and verdict.
+          </p>
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-muted-foreground">From</label>
+              <input
+                type="month"
+                value={photoFrom}
+                onChange={(e) => e.target.value && setPhotoFrom(e.target.value)}
+                className="h-10 w-full rounded-xl border border-transparent bg-input px-2 text-sm text-foreground focus:border-primary focus:bg-background focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-muted-foreground">To</label>
+              <input
+                type="month"
+                value={photoTo}
+                onChange={(e) => e.target.value && setPhotoTo(e.target.value)}
+                className="h-10 w-full rounded-xl border border-transparent bg-input px-2 text-sm text-foreground focus:border-primary focus:bg-background focus:outline-none"
+              />
+            </div>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {campaignIds.length === 0
+              ? "Select campaigns above first."
+              : `${campaignIds.length} campaign${campaignIds.length === 1 ? "" : "s"} selected · saves straight to disk`}
+          </p>
+          {zipError && <p className="mt-2 text-xs font-medium text-danger">{zipError}</p>}
+          {zipStatus && !zipError && <p className="mt-2 text-xs text-muted-foreground">{zipStatus}</p>}
+          <Button
+            className="mt-3 w-full"
+            variant="outline"
+            onClick={downloadPhotos}
+            disabled={zipping || campaignIds.length === 0}
+          >
+            <Images className="h-4 w-4" /> {zipping ? "Preparing…" : "Download photos"}
           </Button>
         </div>
       </div>

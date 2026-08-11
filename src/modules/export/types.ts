@@ -7,6 +7,23 @@ export type CampaignOption = {
 
 export type DepartmentOption = { id: string; name: string };
 
+/** One photo destined for the zip: which store folder it lands in, and what
+ * the file is called. One entry per photo, so a submission asking for two
+ * photos produces two of these. */
+export type PhotoExportItem = {
+  storeName: string;
+  campaignName: string;
+  /** "YYYY-MM" — in the filename so a W2 from July can't collide with a W2 from August. */
+  month: string;
+  week: number;
+  /** "approved" / "rejected" / the recorded tier label — goes in the filename. */
+  verdict: string;
+  url: string;
+  /** 1-based, only used to disambiguate when a submission has several photos. */
+  photoIndex: number;
+  photoCount: number;
+};
+
 /** One row per campaign × store × week (day-of-month chunk). Backs both the
  * "Overall payouts" and "Submission status" exports — same grouping, just a
  * different column selection. */
