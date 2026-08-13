@@ -17,6 +17,25 @@ export function normalizeName(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+/** Fetches all rows from a paginated Supabase query, bypassing the default
+ * 1000-row cap. Every read in this module that isn't scoped to a single
+ * campaign×store×day needs this — daily, SKU-level data reaches 50,000+ rows
+ * for one campaign in one month, and a query that silently truncates at 1000
+ * doesn't fail, it just feeds wrong numbers into every median downstream. */
+async function fetchAllRows<T>(
+  buildQuery: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
+  pageSize = 1000,
+): Promise<T[]> {
+  const results: T[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await buildQuery(from, from + pageSize - 1);
+    if (error || !data || data.length === 0) break;
+    results.push(...data);
+    if (data.length < pageSize) break;
+  }
+  return results;
+}
+
 export async function listStoreOptions(): Promise<NameOption[]> {
   const supabase = await createClient();
   const { data } = await supabase.from("stores").select("id, name").is("deleted_at", null).order("name", { ascending: true });
@@ -37,9 +56,11 @@ export async function buildStoreResolver(): Promise<Map<string, string>> {
 
 export async function listCampaignOptions(): Promise<CampaignOption[]> {
   const supabase = await createClient();
-  const { data } = await supabase.from("contest_campaign_rows").select("raw_campaign_name");
+  const data = await fetchAllRows<{ raw_campaign_name: string }>((from, to) =>
+    supabase.from("contest_campaign_rows").select("raw_campaign_name").range(from, to),
+  );
   const seen = new Map<string, string>();
-  for (const r of (data as any[]) ?? []) {
+  for (const r of data) {
     const key = normalizeName(r.raw_campaign_name);
     if (!seen.has(key)) seen.set(key, r.raw_campaign_name.trim());
   }
@@ -48,14 +69,43 @@ export async function listCampaignOptions(): Promise<CampaignOption[]> {
     .sort((a, b) => a.label.localeCompare(b.label));
 }
 
+type WeekRow = { month: string; week: number; raw_campaign_name: string };
+
+/** Distinct real Vero campaign names, for the template generator's contest
+ * picker. Deliberately NOT sourced from contest_campaign_rows like
+ * listCampaignOptions above — that list only contains names that have
+ * already been imported once, which would make templates useless for their
+ * actual purpose: producing the first sheet for a contest that has no data
+ * in Vero yet. */
+export async function listContestNameOptions(): Promise<CampaignOption[]> {
+  const supabase = await createClient();
+  const rows = await fetchAllRows<{ name: string }>((from, to) =>
+    supabase.from("campaigns").select("name").is("deleted_at", null).range(from, to),
+  );
+  const seen = new Map<string, string>();
+  for (const r of rows) {
+    const key = normalizeName(r.name);
+    if (!seen.has(key)) seen.set(key, r.name.trim());
+  }
+  return [...seen.entries()].map(([key, label]) => ({ key, label })).sort((a, b) => a.label.localeCompare(b.label));
+}
+
 export async function listAvailableWeeks(campaignKey: string): Promise<{ month: string; week: number }[]> {
   const supabase = await createClient();
-  const [{ data: c }, { data: i }, { data: s }] = await Promise.all([
-    supabase.from("contest_campaign_rows").select("month, week, raw_campaign_name"),
-    supabase.from("contest_inventory_rows").select("month, week, raw_campaign_name"),
-    supabase.from("contest_sell_side_rows").select("month, week, raw_campaign_name"),
+  // `week is not null` excludes the daily rows added in 0027 — those carry a
+  // `date` instead and belong to the daily report, not this week picker.
+  const [c, i, s] = await Promise.all([
+    fetchAllRows<WeekRow>((from, to) =>
+      supabase.from("contest_campaign_rows").select("month, week, raw_campaign_name").not("week", "is", null).range(from, to),
+    ),
+    fetchAllRows<WeekRow>((from, to) =>
+      supabase.from("contest_inventory_rows").select("month, week, raw_campaign_name").not("week", "is", null).range(from, to),
+    ),
+    fetchAllRows<WeekRow>((from, to) =>
+      supabase.from("contest_sell_side_rows").select("month, week, raw_campaign_name").not("week", "is", null).range(from, to),
+    ),
   ]);
-  const all = [...((c as any[]) ?? []), ...((i as any[]) ?? []), ...((s as any[]) ?? [])];
+  const all = [...c, ...i, ...s];
   const seen = new Set<string>();
   const out: { month: string; week: number }[] = [];
   for (const r of all) {
@@ -112,44 +162,61 @@ async function buildStoreBundles(campaignKey: string, month: string, week: numbe
   const supabase = await createClient();
   const monthDate = `${month}-01`;
 
-  const [{ data: campaignRows }, { data: inventoryRows }, { data: sellRows }] = await Promise.all([
-    supabase
-      .from("contest_campaign_rows")
-      .select("raw_campaign_name, store_id, status, stores ( name )")
-      .eq("month", monthDate)
-      .eq("week", week),
-    supabase
-      .from("contest_inventory_rows")
-      .select(
-        "raw_campaign_name, store_id, target_store_stock, in_store_stock, target_warehouse_stock, in_warehouse_stock, stores ( name )",
-      )
-      .eq("month", monthDate)
-      .eq("week", week),
-    supabase
-      .from("contest_sell_side_rows")
-      .select(
-        `
-        raw_campaign_name, store_id, stores ( name ),
-        this_month_gmv, last_month_gmv, last_year_gmv,
-        this_month_penetration, last_month_penetration, last_year_penetration,
-        this_month_avg_unit, last_month_avg_unit, last_year_avg_unit,
-        this_month_category_contribution, last_month_category_contribution, last_year_category_contribution
-        `,
-      )
-      .eq("month", monthDate)
-      .eq("week", week),
+  // These three queries are scoped to one month+week but NOT to one campaign
+  // (campaign matching happens below via normalizeName, since raw_campaign_name
+  // is free text and several spellings can normalize to the same campaign).
+  // That means a week where several campaigns report at once returns all of
+  // their rows combined, and inventory is already per-SKU — 172 stores × even
+  // a handful of SKUs clears PostgREST's 1000-row default. Without pagination
+  // this doesn't error, it just drops rows past the cap and every median below
+  // goes quietly wrong. fetchAllRows removes the cap.
+  const [campaignRows, inventoryRows, sellRows] = await Promise.all([
+    fetchAllRows<any>((from, to) =>
+      supabase
+        .from("contest_campaign_rows")
+        .select("raw_campaign_name, store_id, status, stores ( name )")
+        .eq("month", monthDate)
+        .eq("week", week)
+        .range(from, to),
+    ),
+    fetchAllRows<any>((from, to) =>
+      supabase
+        .from("contest_inventory_rows")
+        .select(
+          "raw_campaign_name, store_id, target_store_stock, in_store_stock, target_warehouse_stock, in_warehouse_stock, stores ( name )",
+        )
+        .eq("month", monthDate)
+        .eq("week", week)
+        .range(from, to),
+    ),
+    fetchAllRows<any>((from, to) =>
+      supabase
+        .from("contest_sell_side_rows")
+        .select(
+          `
+          raw_campaign_name, store_id, stores ( name ),
+          this_month_gmv, last_month_gmv, last_year_gmv,
+          this_month_penetration, last_month_penetration, last_year_penetration,
+          this_month_avg_unit, last_month_avg_unit, last_year_avg_unit,
+          this_month_category_contribution, last_month_category_contribution, last_year_category_contribution
+          `,
+        )
+        .eq("month", monthDate)
+        .eq("week", week)
+        .range(from, to),
+    ),
   ]);
 
   const matchesCampaign = (name: string) => normalizeName(name) === campaignKey;
 
   const statusByStore = new Map<string, { status: string; storeName: string }>();
-  for (const r of (campaignRows as any[]) ?? []) {
+  for (const r of campaignRows) {
     if (!r.store_id || !matchesCampaign(r.raw_campaign_name)) continue;
     statusByStore.set(r.store_id, { status: r.status, storeName: r.stores?.name ?? "Unknown store" });
   }
 
   const invByStore = new Map<string, { skus: any[]; storeName: string }>();
-  for (const r of (inventoryRows as any[]) ?? []) {
+  for (const r of inventoryRows) {
     if (!r.store_id || !matchesCampaign(r.raw_campaign_name)) continue;
     const entry = invByStore.get(r.store_id) ?? { skus: [] as any[], storeName: r.stores?.name ?? "Unknown store" };
     entry.skus.push(r);
@@ -157,7 +224,7 @@ async function buildStoreBundles(campaignKey: string, month: string, week: numbe
   }
 
   const sellByStore = new Map<string, any>();
-  for (const r of (sellRows as any[]) ?? []) {
+  for (const r of sellRows) {
     if (!r.store_id || !matchesCampaign(r.raw_campaign_name)) continue;
     sellByStore.set(r.store_id, r);
   }

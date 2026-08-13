@@ -13,11 +13,17 @@ export const APPROVED_STATUSES = new Set(["approved", "half approved"]);
 
 export type NameOption = { id: string; label: string };
 export type UnmatchedName = { name: string; rowCount: number };
+/** A sku_code in the sheet that the named campaign's SKU list doesn't contain.
+ * Rows carrying one are reported and excluded rather than imported blind. */
+export type UnknownSku = { code: string; rowCount: number };
+
+// All three sheets moved from weekly to daily grain in 0027: `date` replaces
+// the old month + week pair. `month` is still written to the database (it is
+// NOT NULL there) but is derived from the date rather than supplied.
 
 // ---- Campaign Data ----
 export type CampaignSourceRow = {
-  month: string; // "YYYY-MM"
-  week: number;
+  date: string; // "YYYY-MM-DD"
   campaignName: string;
   storeName: string;
   status: string;
@@ -26,16 +32,17 @@ export type CampaignPreviewRow = { index: number; raw: CampaignSourceRow; storeI
 export type CampaignImportPreview = {
   rows: CampaignPreviewRow[];
   unmatchedStores: UnmatchedName[];
+  unknownSkus: UnknownSku[]; // always empty — this sheet has no SKU column
   matchedCount: number;
   totalCount: number;
 };
 
 // ---- Inventory Data ----
 export type InventorySourceRow = {
-  month: string;
-  week: number;
+  date: string;
   campaignName: string;
   storeName: string;
+  skuCode: string;
   skuName: string;
   targetStoreStock: number | null;
   inStoreStock: number | null;
@@ -46,16 +53,24 @@ export type InventoryPreviewRow = { index: number; raw: InventorySourceRow; stor
 export type InventoryImportPreview = {
   rows: InventoryPreviewRow[];
   unmatchedStores: UnmatchedName[];
+  unknownSkus: UnknownSku[];
   matchedCount: number;
   totalCount: number;
 };
 
 // ---- Sell Side Data ----
+// Units are what make days of cover, rate of sale, overstock and phantom stock
+// possible: stock is counted in units and GMV in rupees, so without units the
+// two can never be divided into each other.
 export type SellSideSourceRow = {
-  month: string;
-  week: number;
+  date: string;
   campaignName: string;
   storeName: string;
+  skuCode: string;
+  skuName: string;
+  thisMonthUnits: number | null;
+  lastMonthUnits: number | null;
+  lastYearUnits: number | null;
   thisMonthGmv: number | null;
   lastMonthGmv: number | null;
   lastYearGmv: number | null;
@@ -74,6 +89,7 @@ export type SellSidePreviewRow = { index: number; raw: SellSideSourceRow; storeI
 export type SellSideImportPreview = {
   rows: SellSidePreviewRow[];
   unmatchedStores: UnmatchedName[];
+  unknownSkus: UnknownSku[];
   matchedCount: number;
   totalCount: number;
 };

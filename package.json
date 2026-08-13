@@ -12,6 +12,7 @@
     "@supabase/ssr": "^0.12.0",
     "@supabase/supabase-js": "^2.108.1",
     "client-zip": "^2.5.0",
+    "google-auth-library": "^11.0.2",
     "lucide-react": "^1.17.0",
     "next": "16.2.9",
     "openai": "^6.42.0",

@@ -57,3 +57,29 @@ export function parseMonth(cell: string): string | null {
   if (!Number.isNaN(d.getTime())) return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   return null;
 }
+
+/** Strict ISO (YYYY-MM-DD) only.
+ *
+ * This deliberately rejects 12/08/2026. Numeric slash formats are ambiguous
+ * between day-first and month-first, and a silent misread would file every
+ * figure under the wrong day while nothing looked broken — which then
+ * corrupts rate of sale, days of cover and every dated comparison downstream.
+ * Failing loudly is the only safe option. The generated templates emit ISO,
+ * so in practice this costs nothing; if a sheet comes back reformatted, the
+ * import says so and names the offending rows. */
+export function parseDate(cell: string): string | null {
+  const c = cell.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(c)) return null;
+  const [y, m, d] = c.split("-").map(Number);
+  // Rejects impossible dates that still match the pattern, e.g. 2026-02-31.
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+  return c;
+}
+
+/** "2026-08-12" → "2026-08-01" — the month bucket a daily row belongs to.
+ * `month` is NOT NULL on all three contest tables, so every daily insert
+ * still has to supply it. */
+export function monthStartOf(isoDate: string): string {
+  return `${isoDate.slice(0, 7)}-01`;
+}
