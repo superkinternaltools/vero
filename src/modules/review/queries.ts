@@ -2,6 +2,7 @@ import { createClient } from "@/core/db/server";
 import { createAdminClient } from "@/core/db/admin";
 import { getAllowedCampaignIdsForUser } from "@/core/auth/campaign-scope";
 import type { PayoutTier } from "@/modules/campaigns/types";
+import type { SkuRequirement, SkuRow } from "@/modules/brand-visibility/types";
 
 // Admin client used so reviewers (non-admin) can read the review queue.
 // RLS on submissions only covers admins and field users; reviewers have no read policy.
@@ -31,7 +32,25 @@ export type ReviewRow = {
   noLocationFlag: boolean;
   payoutModel: string;
   payoutTiers: PayoutTier[];
+  /** Set only for Brand Visibility months — null for a regular campaign. */
+  skuRequirement: SkuRequirement | null;
+  skus: SkuRow[];
 };
+
+/** campaign_sku_requirements is 1:1 with a campaign, but PostgREST doesn't
+ * know that from a plain FK and can return it as a one-item array. */
+function mapSkuRequirement(raw: any): SkuRequirement | null {
+  const row = Array.isArray(raw) ? raw[0] : raw;
+  if (!row) return null;
+  return {
+    mode: row.mode,
+    category: row.category,
+    minProducts: row.min_products,
+    shelf: row.shelf,
+    qtyMode: row.qty_mode,
+    qty: row.qty,
+  };
+}
 
 /** PostgREST caps a single .select() at 1000 rows — with more than 1000
  * pending_review submissions system-wide, the oldest 1000 (by created_at)
@@ -52,7 +71,9 @@ async function fetchAllPendingReviewRows(
         id, campaign_id, store_id, created_at, photos, comments, ai_score, ai_verdict, ai_assessment,
         geofence_flag, geofence_distance_m, duplicate_flag, no_location_flag,
         campaigns ( name, ai_score_visible, reference_images, payout_model, payout_tiers,
-                    campaign_departments ( department_id, departments ( name ) ) ),
+                    campaign_departments ( department_id, departments ( name ) ),
+                    campaign_sku_requirements ( mode, category, min_products, shelf, qty_mode, qty ),
+                    campaign_skus ( id, sku_code, sku_name, shelf, qty ) ),
         stores ( name ),
         submitter:submitted_by ( display_name, email )
         `,
@@ -113,6 +134,14 @@ export async function listPendingReviews(scope: {
     noLocationFlag: !!row.no_location_flag,
     payoutModel: row.campaigns?.payout_model ?? "binary",
     payoutTiers: row.campaigns?.payout_tiers ?? [],
+    skuRequirement: mapSkuRequirement(row.campaigns?.campaign_sku_requirements),
+    skus: (row.campaigns?.campaign_skus ?? []).map((s: any) => ({
+      id: s.id,
+      skuCode: s.sku_code,
+      skuName: s.sku_name,
+      shelf: s.shelf,
+      qty: s.qty,
+    })),
   }));
 }
 

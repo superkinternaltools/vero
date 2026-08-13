@@ -597,6 +597,43 @@ export function ReviewClient({
               </p>
             )}
 
+            {active.skuRequirement && (
+              <div className="mt-4 rounded-xl border border-border p-4">
+                <p className="text-sm font-medium text-foreground">Required on shelf</p>
+                {active.skuRequirement.mode === "all" ? (
+                  <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
+                    {active.skus.map((s) => (
+                      <li key={s.id} className="flex items-center justify-between">
+                        <span>{s.skuName}</span>
+                        <span className="text-xs">
+                          {[s.shelf, s.qty != null ? `${s.qty} facings` : null].filter(Boolean).join(" · ")}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : active.skuRequirement.mode === "any_list" ? (
+                  <div className="mt-2 text-sm text-muted-foreground">
+                    <p>
+                      At least <span className="font-medium text-foreground">{active.skuRequirement.minProducts ?? "—"}</span> of the approved list
+                      {active.skuRequirement.shelf ? `, on ${active.skuRequirement.shelf}` : ""}
+                      {active.skuRequirement.qty != null ? `, ${active.skuRequirement.qty} facings each` : ""}.
+                    </p>
+                    <p className="mt-1 text-xs">{active.skus.map((s) => s.skuName).join(", ")}</p>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    At least <span className="font-medium text-foreground">{active.skuRequirement.minProducts ?? "—"}</span> different products from{" "}
+                    <span className="font-medium text-foreground">{active.skuRequirement.category ?? "the category"}</span>
+                    {active.skuRequirement.shelf ? `, on ${active.skuRequirement.shelf}` : ""}
+                    {active.skuRequirement.qty != null ? `, ${active.skuRequirement.qty} facings total` : ""}.
+                  </p>
+                )}
+                <p className="mt-2 text-xs text-muted-foreground/70">
+                  This is the requirement, for reference — checking it against the photo is still your judgment call.
+                </p>
+              </div>
+            )}
+
             <div className="mt-4 rounded-xl border border-border p-4">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-medium text-foreground">AI assessment</p>

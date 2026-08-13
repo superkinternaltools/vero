@@ -5,6 +5,7 @@ export const PERMISSION_KEYS = [
   { key: "tasks", label: "Tasks" },
   { key: "review", label: "Review" },
   { key: "campaigns", label: "Campaigns" },
+  { key: "brand_visibility", label: "Brand Visibility Campaigns" },
   { key: "summary", label: "Summary" },
   { key: "analysis", label: "Analysis" },
   { key: "leaderboard", label: "Leaderboard" },

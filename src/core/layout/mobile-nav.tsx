@@ -13,6 +13,7 @@ import {
   BarChart3,
   Trophy,
   Megaphone,
+  Tags,
   Store,
   Users,
   Building2,
@@ -52,6 +53,7 @@ const groups: Group[] = [
     label: "Manage",
     items: [
       { key: "campaigns", name: "Campaigns", href: "/campaigns", icon: Megaphone },
+      { key: "brand_visibility", name: "Brand Visibility Campaigns", href: "/brand-visibility", icon: Tags },
       { key: "attendance", name: "Attendance", href: "/attendance", icon: CalendarClock },
       { key: "stores", name: "Stores", href: "/stores", icon: Store },
       { key: "users", name: "Users", href: "/users", icon: Users },
