@@ -111,6 +111,7 @@ export async function applyInventoryImport(
   const insertRows = rows.map((r) => ({
     month: `${r.month}-01`,
     week: r.week,
+    day: r.day,
     raw_campaign_name: r.campaignName,
     raw_store_name: r.storeName,
     store_id: byStoreName.get(normalizeName(r.storeName)) ?? null,

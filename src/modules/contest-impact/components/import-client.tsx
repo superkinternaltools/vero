@@ -122,6 +122,7 @@ function parseInventoryRows(
     .map((r): InventorySourceRow => {
       let month = "";
       let week = 0;
+      let day: string | null = null;
       if (hasDate) {
         const raw = get(r, "date").trim();
         const d = parseSheetDate(raw);
@@ -131,6 +132,7 @@ function parseInventoryRows(
         if (d && d.week === null) afterCutoff += 1;
         month = d?.month ?? "";
         week = d?.week ?? 0;
+        day = d?.iso ?? null;
       } else {
         month = parseMonth(get(r, "month"), year) ?? "";
         week = Number(get(r, "week")) || 0;
@@ -138,6 +140,7 @@ function parseInventoryRows(
       return {
         month,
         week,
+        day,
         storeName: get(r, "storeName").trim(),
         campaignName: get(r, "campaignName").trim(),
         skuName: get(r, "skuName").trim(),

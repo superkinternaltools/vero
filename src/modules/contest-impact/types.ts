@@ -1,16 +1,3 @@
-export type GroupKey = "approved" | "configured_not_approved" | "not_configured";
-
-export const GROUP_LABELS: Record<GroupKey, string> = {
-  approved: "Approved",
-  configured_not_approved: "Configured, Not Approved",
-  not_configured: "Not Configured",
-};
-
-export const GROUP_ORDER: GroupKey[] = ["approved", "configured_not_approved", "not_configured"];
-
-/** Statuses from the Campaign Data sheet that count as a successful contest run. */
-export const APPROVED_STATUSES = new Set(["approved", "half approved"]);
-
 export type NameOption = { id: string; label: string };
 export type UnmatchedName = { name: string; rowCount: number };
 
@@ -34,6 +21,7 @@ export type CampaignImportPreview = {
 export type InventorySourceRow = {
   month: string;
   week: number;
+  day: string | null; // "YYYY-MM-DD", when the sheet carries a real date
   campaignName: string;
   storeName: string;
   skuName: string;
@@ -79,52 +67,98 @@ export type SellSideImportPreview = {
 };
 
 // ---- Report ----
-export type WeekMetrics = {
-  gmvVsLastMonth: number | null;
-  gmvVsLastYear: number | null;
-  penetrationVsLastMonth: number | null;
-  penetrationVsLastYear: number | null;
-  avgUnitVsLastMonth: number | null;
-  avgUnitVsLastYear: number | null;
-  categoryContributionVsLastMonth: number | null;
-  categoryContributionVsLastYear: number | null;
-  storeStockFillRate: number | null; // weighted, this week
-  storeSkuOnTargetPct: number | null;
-  warehouseStockFillRate: number | null;
-  warehouseSkuOnTargetPct: number | null;
+
+/** A store is "contest" if it has any row at all in Campaign Data this
+ * month — whatever Status that row carries. "control" means it sold Tide
+ * products (it has Sell Side or Inventory rows) but never ran the display,
+ * which is what makes it a usable comparison group rather than a gap in
+ * the data. */
+export type ContestGroup = "contest" | "control";
+
+export const CONTEST_GROUP_LABELS: Record<ContestGroup, string> = {
+  contest: "Contest stores",
+  control: "Control stores",
 };
 
-export type GroupSummary = { key: GroupKey; count: number; metrics: WeekMetrics };
+export type SellMetricKey = "gmv" | "penetration" | "avgUnit" | "categoryContribution";
 
-export type StoreDetailRow = {
+export const SELL_METRICS: { key: SellMetricKey; label: string }[] = [
+  { key: "gmv", label: "GMV" },
+  { key: "penetration", label: "Customer penetration" },
+  { key: "avgUnit", label: "Avg unit" },
+  { key: "categoryContribution", label: "Category contribution" },
+];
+
+/** A single growth comparison, contest vs control, with the observation
+ * counts every figure needs to be read against — n=2 and n=190 do not carry
+ * the same weight even when they produce a similarly-sized percentage. */
+export type GrowthStat = {
+  contest: number | null;
+  control: number | null;
+  gapPct: number | null;
+  contestN: number;
+  controlN: number;
+};
+
+export type MetricComparison = Record<SellMetricKey, { vsLastMonth: GrowthStat; vsLastYear: GrowthStat }>;
+
+export type WeekSales = { week: number; metrics: MetricComparison };
+
+export type StoreStatusWeek = { week: number; status: string | null };
+
+export type StoreRow = {
   storeId: string;
   storeName: string;
-  status: string | null;
+  group: ContestGroup;
+  /** Every status this store carried this month, one per week it has a row
+   * for — shown as-is, not collapsed into "approved"/"not approved". */
+  statusByWeek: StoreStatusWeek[];
   gmv: number | null;
-  gmvVsLastMonth: number | null;
-  gmvVsLastYear: number | null;
+  gmvGrowthVsLastMonth: number | null;
+  gmvGrowthVsLastYear: number | null;
+  hasLastYearData: boolean;
   storeStockFillRate: number | null;
-  warehouseStockFillRate: number | null;
+  storeSkuOnTargetPct: number | null;
 };
 
-export type WeekReport = {
-  groups: GroupSummary[];
-  detail: Record<GroupKey, StoreDetailRow[]>;
+export type DailyStockPoint = { day: string; fillRate: number | null };
+
+export type SkuStockRow = {
+  skuName: string;
+  avgFillRate: number | null;
+  onTargetPct: number | null;
+  /** Summed store-side shortfall (target − actual, positive days only) across the month. */
+  shortfallUnits: number | null;
+  /** The single central warehouse reading for this SKU (it's one shared pool, not per-store). */
+  warehouseUnits: number | null;
+  /** warehouseUnits ÷ shortfallUnits — how many times over the warehouse could cover it. */
+  coverMultiple: number | null;
 };
 
-export type WeekTrendPoint = {
-  week: number;
-  counts: Record<GroupKey, number>;
-  byGroup: Record<GroupKey, {
-    gmvVsLastMonth: number | null;
-    penetrationVsLastMonth: number | null;
-    avgUnitVsLastMonth: number | null;
-    categoryContributionVsLastMonth: number | null;
-    storeStockFillRate: number | null;
-    warehouseStockFillRate: number | null;
-  }>;
+export type Verdict = {
+  contestGmvGrowth: number | null;
+  controlGmvGrowth: number | null;
+  gapPct: number | null;
+  week1ContestGmvGrowth: number | null;
+  week1ControlGmvGrowth: number | null;
+  contestStoreCount: number;
+  controlStoreCount: number;
 };
 
-export type MonthlyOverview = { weeks: WeekTrendPoint[] };
+export type LastYearAvailability = {
+  contestStoresWithData: number;
+  contestStoresTotal: number;
+  storeNames: string[];
+};
+
+export type ContestMonthReport = {
+  verdict: Verdict;
+  weeklySales: WeekSales[];
+  pooledSales: MetricComparison;
+  stores: StoreRow[];
+  dailyStock: DailyStockPoint[];
+  skuStock: SkuStockRow[];
+  lastYear: LastYearAvailability;
+};
 
 export type CampaignOption = { key: string; label: string };
