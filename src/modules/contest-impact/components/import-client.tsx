@@ -62,7 +62,7 @@ function parseCampaignRows(text: string, year: number): { rows: CampaignSourceRo
         status: get(r, "status").trim(),
       }),
     )
-    .filter((r) => r.storeName && r.campaignName && r.month && r.week && r.status);
+    .filter((r) => r.storeName && r.campaignName && r.month && r.week && r.week <= 4 && r.status);
   return { rows, error: null };
 }
 
@@ -221,7 +221,7 @@ function parseSellSideRows(text: string, year: number): { rows: SellSideSourceRo
         inStoreValue: parseNumber(get(r, "inStoreValue")),
       }),
     )
-    .filter((r) => r.storeName && r.campaignName && r.month && r.week);
+    .filter((r) => r.storeName && r.campaignName && r.month && r.week && r.week <= 4);
   return { rows, error: null };
 }
 
