@@ -523,11 +523,11 @@ function StoresView({ report }: { report: ContestMonthReport }) {
                       <span className="text-xs text-muted-foreground">no contest</span>
                     ) : (
                       <div className="flex gap-1">
-                        {s.statusByWeek.map((sw) => {
+                        {s.statusByWeek.map((sw, i) => {
                           const style = statusStyle(sw.status);
                           return (
                             <span
-                              key={sw.week}
+                              key={i}
                               title={`Week ${sw.week}: ${sw.status ?? "no row"}`}
                               className={cn("h-2.5 w-2.5 rounded-full", style.dot)}
                             />
