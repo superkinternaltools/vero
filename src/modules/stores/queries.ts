@@ -5,7 +5,7 @@ export async function listStores(): Promise<Store[]> {
   const supabase = await createClient();
   const { data } = await supabase
     .from("stores")
-    .select("id, code, name, aligned, store_type, latitude, longitude, score, created_at")
+    .select("id, code, name, aligned, store_type, latitude, longitude, score, opened_at, closed_at, created_at")
     .is("deleted_at", null)
     .order("name", { ascending: true });
   return (data as Store[]) ?? [];

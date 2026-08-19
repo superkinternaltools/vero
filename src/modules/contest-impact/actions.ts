@@ -13,6 +13,7 @@ import type {
   SellSideSourceRow,
   SellSideImportPreview,
   UnmatchedName,
+  StatusClassification,
 } from "./types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -137,6 +138,27 @@ export async function applyInventoryImport(
   await clearDummyData();
   revalidatePath("/contest-impact");
   return { imported: insertRows.length };
+}
+
+// ==================== Status classification ====================
+// Which raw Status strings count as "approved execution" is a per-campaign
+// call — captured here rather than assumed, since different campaigns use
+// different vocabularies.
+
+export async function classifyStatuses(campaignKey: string, classifications: StatusClassification[]): Promise<Result> {
+  await requireAdmin();
+  const supabase = await createClient();
+  const rows = classifications.map((c) => ({
+    campaign_key: campaignKey,
+    raw_status: c.rawStatus,
+    is_approved: c.isApproved,
+  }));
+  const { error } = await supabase
+    .from("contest_status_classification")
+    .upsert(rows, { onConflict: "campaign_key,raw_status" });
+  if (error) return { error: error.message };
+  revalidatePath("/contest-impact");
+  return {};
 }
 
 // ==================== Sell Side Data ====================
