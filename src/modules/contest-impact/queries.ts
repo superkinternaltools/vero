@@ -5,7 +5,6 @@ import type {
   CampaignOption,
   ContestGroup,
   ContestMonthReport,
-  DailyStockPoint,
   GroupValues,
   MetricKind,
   MetricSeries,
@@ -111,15 +110,100 @@ async function getStatusApprovalMap(campaignKey: string): Promise<Map<string, bo
   return map;
 }
 
+// ==================== Vero campaign sync ====================
+// Campaign Data can also be pulled straight from a real Vero campaign's own
+// tasks + submissions instead of a CSV — this stays additive to the CSV path,
+// not a replacement.
+
+export type VeroCampaignOption = { id: string; name: string };
+
+export async function listVeroCampaigns(): Promise<VeroCampaignOption[]> {
+  const supabase = await createClient();
+  const { data } = await supabase.from("campaigns").select("id, name").is("deleted_at", null).order("name");
+  return ((data as any[]) ?? []).map((c) => ({ id: c.id, name: c.name }));
+}
+
+/** Same week-of-month bucketing Vero's own Summary page already uses, so the
+ * numbers here match what the ops team sees there. */
+function weekOfDay(day: number): number {
+  return day <= 7 ? 1 : day <= 14 ? 2 : day <= 21 ? 3 : 4;
+}
+
+export type VeroCampaignSyncRow = { week: number; storeId: string; storeName: string; status: string };
+export type VeroCampaignSyncPreview = {
+  campaignName: string;
+  rows: VeroCampaignSyncRow[];
+  statuses: { status: string; isApproved: boolean | null }[];
+};
+
+/** Reads a campaign's reviewed submissions for one month and shapes them
+ * exactly like a Campaign Data CSV row. A task with no reviewed submission
+ * (still pending, not_done, missed) contributes no row for that store/week —
+ * same as a CSV simply not having a line for it. */
+export async function getVeroCampaignSyncPreview(campaignId: string, month: string): Promise<VeroCampaignSyncPreview> {
+  const supabase = await createClient();
+  const monthStart = `${month}-01`;
+  const [y, m] = month.split("-").map(Number);
+  const monthEnd = `${month}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, "0")}`;
+
+  const { data: campaign } = await supabase.from("campaigns").select("name").eq("id", campaignId).single();
+  const campaignName = (campaign as any)?.name ?? "Unknown campaign";
+
+  const tasks: any[] = [];
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await supabase
+      .from("tasks")
+      .select("id, store_id, due_date, stores ( name )")
+      .eq("campaign_id", campaignId)
+      .gte("due_date", monthStart)
+      .lte("due_date", monthEnd)
+      .range(offset, offset + 999);
+    if (error) throw error;
+    tasks.push(...(data ?? []));
+    if (!data || data.length < 1000) break;
+  }
+
+  const { data: submissionRows } = await supabase
+    .from("submissions")
+    .select("task_id, payout_tier_label, human_verdict")
+    .eq("campaign_id", campaignId);
+  const submissionByTask = new Map<string, any>();
+  for (const s of (submissionRows as any[]) ?? []) submissionByTask.set(s.task_id, s);
+
+  const rows: VeroCampaignSyncRow[] = [];
+  for (const t of tasks) {
+    const submission = submissionByTask.get(t.id);
+    const status: string | null = submission?.payout_tier_label?.trim() || submission?.human_verdict?.trim() || null;
+    if (!status) continue;
+    const day = Number((t.due_date as string).split("-")[2]);
+    rows.push({
+      week: weekOfDay(day),
+      storeId: t.store_id,
+      storeName: t.stores?.name ?? "Unknown store",
+      status,
+    });
+  }
+
+  const campaignKey = normalizeName(campaignName);
+  const approvalMap = await getStatusApprovalMap(campaignKey);
+  const distinctStatuses = [...new Set(rows.map((r) => r.status))].sort();
+  const statuses = distinctStatuses.map((status) => ({ status, isApproved: approvalMap.get(status) ?? null }));
+
+  return { campaignName, rows, statuses };
+}
+
 // ==================== report ====================
 
 function sum(values: number[]): number {
   return values.reduce((a, b) => a + b, 0);
 }
 
-function pctRatio(numer: number, denom: number): number | null {
-  if (denom === 0) return null;
-  return (numer / denom) * 100;
+/** Mean of a set of already-computed availability percentages, clamped to
+ * 0–100 — the sheet supplies store/warehouse availability directly, so this
+ * never touches a raw stock count. */
+function avgPercent(values: number[]): number | null {
+  if (!values.length) return null;
+  return Math.min(100, Math.max(0, sum(values) / values.length));
 }
 
 /** Rolls a metric's per-store values up to a group figure — always the MEAN
@@ -208,10 +292,27 @@ export async function getContestMonthReport(campaignKey: string, month: string):
 
   const campaignAll = (campaignRowsRaw as any[]).filter((r) => r.store_id && matchesCampaign(r.raw_campaign_name));
   const inventoryAll = (inventoryRowsRaw as any[]).filter((r) => r.store_id && matchesCampaign(r.raw_campaign_name));
-  const sellAll = (sellRowsRaw as any[]).filter((r) => r.store_id && matchesCampaign(r.raw_campaign_name));
+
+  // Penetration and category contribution are stored as raw fractions
+  // (0.0306) straight from the sheet, not percentages (3.06) — scaled here,
+  // once, so every downstream aggregate/growth/format treats them the same
+  // way it treats a metric that's already 0–100. Both are shares of
+  // something (footfall, sales) and can't legitimately be negative, so a
+  // bad source value is floored at 0 rather than shown as e.g. "-2.3%".
+  const PERCENT_FIELDS = [
+    "this_month_penetration", "last_month_penetration", "last_year_penetration",
+    "this_month_category_contribution", "last_month_category_contribution", "last_year_category_contribution",
+  ] as const;
+  const sellAll = (sellRowsRaw as any[])
+    .filter((r) => r.store_id && matchesCampaign(r.raw_campaign_name))
+    .map((r) => {
+      const scaled = { ...r };
+      for (const f of PERCENT_FIELDS) if (scaled[f] != null) scaled[f] = Math.max(0, scaled[f] * 100);
+      return scaled;
+    });
 
   // ---- group every store by its latest-week status this month ----
-  const statusByStore = new Map<string, StoreStatusWeek[]>();
+  const statusByStore = new Map<string, { week: number; status: string }[]>();
   for (const r of campaignAll) {
     const list = statusByStore.get(r.store_id) ?? [];
     list.push({ week: r.week, status: r.status });
@@ -225,8 +326,23 @@ export async function getContestMonthReport(campaignKey: string, month: string):
   }
 
   const approvedOrPoorIds = new Set(statusByStore.keys());
+
+  /** A store's group as of its LATEST week — used only for sorting/filtering
+   * convenience and for the diff-in-diff verdict math (already anchored to
+   * the latest week). Everything that buckets a specific week's data uses
+   * groupOfWeek below instead, since a store's group can change week to week. */
   const groupOf = (storeId: string): ContestGroup => {
     const status = latestStatusByStore.get(storeId);
+    if (status == null) return "control";
+    return statusApproval.get(status.trim()) ? "approved" : "poor";
+  };
+
+  /** A store's group for ONE specific week — "control" if it has no campaign
+   * row that week (whether it never ran the display, or simply hadn't
+   * started yet), otherwise classified from that week's own status. This is
+   * what every weekly aggregate should bucket by, not the month-level group. */
+  const groupOfWeek = (storeId: string, week: number): ContestGroup => {
+    const status = statusByStore.get(storeId)?.find((w) => w.week === week)?.status;
     if (status == null) return "control";
     return statusApproval.get(status.trim()) ? "approved" : "poor";
   };
@@ -273,7 +389,7 @@ export async function getContestMonthReport(campaignKey: string, month: string):
       const n = emptyGroupValues<number>(0);
 
       for (const g of GROUPS) {
-        const rowsInGroup = rowsThisWeek.filter((r) => groupOf(r.store_id) === g);
+        const rowsInGroup = rowsThisWeek.filter((r) => groupOfWeek(r.store_id, week) === g);
         const thisVals = rowsInGroup.map((r) => r[fields.this]).filter((v): v is number => v != null);
         const lmVals = rowsInGroup.map((r) => r[fields.lastMonth]).filter((v): v is number => v != null);
         const lyVals = rowsInGroup.map((r) => r[fields.lastYear]).filter((v): v is number => v != null);
@@ -309,7 +425,7 @@ export async function getContestMonthReport(campaignKey: string, month: string):
   // isn't credited to the campaign. Every figure is an average per store. ----
   const approvedThisMonth = gmvSeries.monthAvg.approved;
   const controlGrowth = gmvSeries.monthGrowthVsLastMonth.control;
-  const approvedLastWeekRows = sell.filter((r) => r.week === lastWeek && groupOf(r.store_id) === "approved");
+  const approvedLastWeekRows = sell.filter((r) => r.week === lastWeek && groupOfWeek(r.store_id, lastWeek) === "approved");
   const approvedLastMonth = aggregate(approvedLastWeekRows.map((r) => r.last_month_gmv).filter((v): v is number => v != null));
   const incrementalValueVsLastMonth =
     approvedThisMonth != null && approvedLastMonth != null && controlGrowth != null
@@ -363,123 +479,93 @@ export async function getContestMonthReport(campaignKey: string, month: string):
     const hasLastYearData = weekRows.some(([, r]) => r.last_year_gmv != null);
 
     const invRows = invByStore.get(storeId) ?? [];
-    let sumIn = 0, sumTarget = 0, hits = 0, counted = 0;
-    for (const r of invRows) {
-      if (r.in_store_stock != null && r.target_store_stock != null) {
-        sumIn += r.in_store_stock;
-        sumTarget += r.target_store_stock;
-        counted += 1;
-        if (r.in_store_stock >= r.target_store_stock) hits += 1;
-      }
-    }
+    const storeAvailVals = invRows.map((r) => r.store_availability).filter((v): v is number => v != null);
+
+    const storeStatuses = statusByStore.get(storeId) ?? [];
+    // Full week-by-week history, including weeks with no campaign row at all
+    // (group "control" that week) — not just the weeks a status happened to exist for.
+    const fullStatusByWeek: StoreStatusWeek[] = weeks.map((week) => ({
+      week,
+      status: storeStatuses.find((s) => s.week === week)?.status ?? null,
+      group: groupOfWeek(storeId, week),
+    }));
 
     return {
       storeId,
       storeName: storeNames.get(storeId) ?? "Unknown store",
       group: groupOf(storeId),
-      statusByWeek: (statusByStore.get(storeId) ?? []).sort((a, b) => a.week - b.week),
+      statusByWeek: fullStatusByWeek,
       latestStatus: latestStatusByStore.get(storeId) ?? null,
       gmv: latest?.this_month_gmv ?? null,
       gmvGrowthVsLastMonth: median(lmGrowths),
       gmvGrowthVsLastYear: median(lyGrowths),
       hasLastYearData,
-      storeStockFillRate: pctRatio(sumIn, sumTarget),
-      storeSkuOnTargetPct: counted ? pctRatio(hits, counted) : null,
+      storeAvailability: avgPercent(storeAvailVals),
     };
   });
   stores.sort((a, b) => (b.gmvGrowthVsLastMonth ?? -Infinity) - (a.gmvGrowthVsLastMonth ?? -Infinity));
 
-  // ---- stock: approved vs poor only — control carries no Inventory Data ----
-  const inventorySorted = [...inventory].sort((a, b) => {
-    const da = a.day ?? "";
-    const db = b.day ?? "";
-    if (da !== db) return da < db ? -1 : 1;
-    return a.week - b.week;
+  const weeklyGroupCounts = weeks.map((week) => {
+    const counts = { week, approved: 0, poor: 0, control: 0 };
+    for (const storeId of allStoreIds) counts[groupOfWeek(storeId, week)] += 1;
+    return counts;
   });
 
-  const byDay = new Map<string, { approvedIn: number; approvedTarget: number; poorIn: number; poorTarget: number }>();
-  const byWeek = new Map<number, { approvedIn: number; approvedTarget: number; poorIn: number; poorTarget: number }>();
-  for (const r of inventorySorted) {
-    if (r.in_store_stock == null || r.target_store_stock == null) continue;
-    const g = groupOf(r.store_id);
+  // ---- stock: approved vs poor only — control carries no Inventory Data.
+  // The sheet already reports availability as a percentage per SKU/store/week,
+  // so every figure here is an average of that percentage, not a ratio of
+  // raw counts. ----
+  const byWeek = new Map<number, { approved: number[]; poor: number[] }>();
+  for (const r of inventory) {
+    const g = groupOfWeek(r.store_id, r.week);
     if (g === "control") continue;
-
-    if (r.day) {
-      const acc = byDay.get(r.day) ?? { approvedIn: 0, approvedTarget: 0, poorIn: 0, poorTarget: 0 };
-      if (g === "approved") { acc.approvedIn += r.in_store_stock; acc.approvedTarget += r.target_store_stock; }
-      else { acc.poorIn += r.in_store_stock; acc.poorTarget += r.target_store_stock; }
-      byDay.set(r.day, acc);
-    }
-
-    const wAcc = byWeek.get(r.week) ?? { approvedIn: 0, approvedTarget: 0, poorIn: 0, poorTarget: 0 };
-    if (g === "approved") { wAcc.approvedIn += r.in_store_stock; wAcc.approvedTarget += r.target_store_stock; }
-    else { wAcc.poorIn += r.in_store_stock; wAcc.poorTarget += r.target_store_stock; }
-    byWeek.set(r.week, wAcc);
+    if (r.store_availability == null) continue;
+    const acc = byWeek.get(r.week) ?? { approved: [], poor: [] };
+    acc[g].push(r.store_availability);
+    byWeek.set(r.week, acc);
   }
-
-  const daily: DailyStockPoint[] = [...byDay.entries()]
-    .sort(([a], [b]) => (a < b ? -1 : 1))
-    .map(([day, acc]) => ({
-      day,
-      approvedFillRate: pctRatio(acc.approvedIn, acc.approvedTarget),
-      poorFillRate: pctRatio(acc.poorIn, acc.poorTarget),
-    }));
-
   const weekly: WeeklyStockPoint[] = [...byWeek.entries()]
     .sort(([a], [b]) => a - b)
     .map(([week, acc]) => ({
       week,
-      approvedFillRate: pctRatio(acc.approvedIn, acc.approvedTarget),
-      poorFillRate: pctRatio(acc.poorIn, acc.poorTarget),
+      approvedStoreAvailability: avgPercent(acc.approved),
+      poorStoreAvailability: avgPercent(acc.poor),
     }));
 
-  let approvedIn = 0, approvedTarget = 0, poorIn = 0, poorTarget = 0, poorShortfall = 0;
-  const bySkuPoor = new Map<string, { sumIn: number; sumTarget: number; hits: number; counted: number; shortfall: number; warehouse: number | null }>();
-  for (const r of inventorySorted) {
-    const g = groupOf(r.store_id);
+  const approvedStoreAvail: number[] = [];
+  const poorStoreAvail: number[] = [];
+  const approvedWhAvail: number[] = [];
+  const poorWhAvail: number[] = [];
+  const bySkuAcc = new Map<string, { skuId: string; productName: string; approved: number[]; poor: number[]; wh: number[] }>();
+  for (const r of inventory) {
+    const g = groupOfWeek(r.store_id, r.week);
     if (g === "control") continue;
-    if (r.in_store_stock != null && r.target_store_stock != null) {
-      if (g === "approved") { approvedIn += r.in_store_stock; approvedTarget += r.target_store_stock; }
-      else {
-        poorIn += r.in_store_stock;
-        poorTarget += r.target_store_stock;
-        poorShortfall += Math.max(0, r.target_store_stock - r.in_store_stock);
-      }
+    if (r.store_availability != null) {
+      (g === "approved" ? approvedStoreAvail : poorStoreAvail).push(r.store_availability);
     }
-    if (g === "poor") {
-      const acc = bySkuPoor.get(r.sku_name) ?? { sumIn: 0, sumTarget: 0, hits: 0, counted: 0, shortfall: 0, warehouse: null };
-      if (r.in_store_stock != null && r.target_store_stock != null) {
-        acc.sumIn += r.in_store_stock;
-        acc.sumTarget += r.target_store_stock;
-        acc.counted += 1;
-        if (r.in_store_stock >= r.target_store_stock) acc.hits += 1;
-        acc.shortfall += Math.max(0, r.target_store_stock - r.in_store_stock);
-      }
-      if (r.in_warehouse_stock != null) acc.warehouse = r.in_warehouse_stock;
-      bySkuPoor.set(r.sku_name, acc);
+    if (r.wh_availability != null) {
+      (g === "approved" ? approvedWhAvail : poorWhAvail).push(r.wh_availability);
     }
+    const acc = bySkuAcc.get(r.sku_id) ?? { skuId: r.sku_id, productName: r.product_name, approved: [] as number[], poor: [] as number[], wh: [] as number[] };
+    if (r.store_availability != null) acc[g === "approved" ? "approved" : "poor"].push(r.store_availability);
+    if (r.wh_availability != null) acc.wh.push(r.wh_availability);
+    bySkuAcc.set(r.sku_id, acc);
   }
 
-  const bySku: SkuStockRow[] = [...bySkuPoor.entries()]
-    .map(([skuName, acc]) => ({
-      skuName,
-      avgFillRate: pctRatio(acc.sumIn, acc.sumTarget),
-      onTargetPct: acc.counted ? pctRatio(acc.hits, acc.counted) : null,
-      shortfallUnits: acc.shortfall,
-      warehouseUnits: acc.warehouse,
-      coverMultiple: acc.warehouse != null && acc.shortfall > 0 ? acc.warehouse / acc.shortfall : null,
+  const bySku: SkuStockRow[] = [...bySkuAcc.values()]
+    .map((acc) => ({
+      skuId: acc.skuId,
+      productName: acc.productName,
+      approvedAvailability: avgPercent(acc.approved),
+      poorAvailability: avgPercent(acc.poor),
+      whAvailability: avgPercent(acc.wh),
     }))
-    .sort((a, b) => a.skuName.localeCompare(b.skuName));
-
-  const warehouseUnits = bySku.reduce((acc, s) => acc + (s.warehouseUnits ?? 0), 0) || null;
+    .sort((a, b) => a.productName.localeCompare(b.productName));
 
   const stock = {
-    daily,
     weekly,
-    avgFillRate: { approved: pctRatio(approvedIn, approvedTarget), poor: pctRatio(poorIn, poorTarget) },
-    shortfallUnitsPoor: poorShortfall || null,
-    warehouseUnits,
-    coverMultiple: warehouseUnits != null && poorShortfall > 0 ? warehouseUnits / poorShortfall : null,
+    avgStoreAvailability: { approved: avgPercent(approvedStoreAvail), poor: avgPercent(poorStoreAvail) },
+    avgWhAvailability: { approved: avgPercent(approvedWhAvail), poor: avgPercent(poorWhAvail) },
     bySku,
   };
 
@@ -490,5 +576,5 @@ export async function getContestMonthReport(campaignKey: string, month: string):
     storeNames: approvedYearStores.map((s) => s.storeName),
   };
 
-  return { verdict, metrics, stores, stock, lastYear };
+  return { verdict, metrics, stores, stock, lastYear, weeklyGroupCounts };
 }

@@ -21,14 +21,16 @@ export type CampaignImportPreview = {
 export type InventorySourceRow = {
   month: string;
   week: number;
-  day: string | null; // "YYYY-MM-DD", when the sheet carries a real date
   campaignName: string;
   storeName: string;
-  skuName: string;
-  targetStoreStock: number | null;
-  inStoreStock: number | null;
-  targetWarehouseStock: number | null;
-  inWarehouseStock: number | null;
+  /** The barcode/EAN — a stable identity independent of product name spelling. */
+  skuId: string;
+  productName: string;
+  /** Already a 0–100 percentage on the sheet, not a raw stock count. */
+  storeAvailability: number | null;
+  /** Warehouse-level availability for this SKU — one shared pool, so this
+   * repeats across every store's row for the same SKU/week. */
+  whAvailability: number | null;
 };
 export type InventoryPreviewRow = { index: number; raw: InventorySourceRow; storeId: string | null };
 export type InventoryImportPreview = {
@@ -56,7 +58,9 @@ export type SellSideSourceRow = {
   thisMonthCategoryContribution: number | null;
   lastMonthCategoryContribution: number | null;
   lastYearCategoryContribution: number | null;
-  inStoreValue: number | null;
+  thisMonthInStoreValue: number | null;
+  lastMonthInStoreValue: number | null;
+  lastYearInStoreValue: number | null;
 };
 export type SellSidePreviewRow = { index: number; raw: SellSideSourceRow; storeId: string | null };
 export type SellSideImportPreview = {
@@ -125,50 +129,53 @@ export type MetricSeries = {
   monthN: GroupValues<number>;
 };
 
-export type StoreStatusWeek = { week: number; status: string | null };
+/** A store's group can genuinely change week to week (approved in week 1,
+ * rejected by week 4) — this carries the real per-week story, including
+ * weeks with no campaign row at all (group "control" for that week only). */
+export type StoreStatusWeek = { week: number; status: string | null; group: ContestGroup };
+
+export type WeeklyGroupCounts = { week: number; approved: number; poor: number; control: number };
 
 export type StoreRow = {
   storeId: string;
   storeName: string;
+  /** The store's group as of its LATEST week only — used for sorting/filtering
+   * convenience. For the full week-to-week story, use statusByWeek. */
   group: ContestGroup;
-  /** Every status this store carried this month, one per week it has a row
-   * for — shown as-is, not collapsed. */
+  /** One entry per week in the report (1 through however many weeks exist),
+   * covering every week including ones with no campaign row for this store. */
   statusByWeek: StoreStatusWeek[];
-  /** The status that decided this store's group — the latest week's status. */
+  /** The status that decided this store's latest-week group. */
   latestStatus: string | null;
   gmv: number | null;
   gmvGrowthVsLastMonth: number | null;
   gmvGrowthVsLastYear: number | null;
   hasLastYearData: boolean;
-  storeStockFillRate: number | null;
-  storeSkuOnTargetPct: number | null;
+  /** Average of this store's SKU-level store_availability rows this month — already a 0–100 percentage on the sheet. */
+  storeAvailability: number | null;
 };
 
-/** Daily fill rate for approved and poor-execution stores — control stores
- * carry no Inventory Data at all, so there's no third line here. */
-export type DailyStockPoint = { day: string; approvedFillRate: number | null; poorFillRate: number | null };
-
-export type WeeklyStockPoint = { week: number; approvedFillRate: number | null; poorFillRate: number | null };
+/** Store and warehouse availability for approved vs poor-execution stores —
+ * control stores carry no Inventory Data at all, so there's no third line. */
+export type WeeklyStockPoint = {
+  week: number;
+  approvedStoreAvailability: number | null;
+  poorStoreAvailability: number | null;
+};
 
 export type SkuStockRow = {
-  skuName: string;
-  avgFillRate: number | null;
-  onTargetPct: number | null;
-  /** Summed store-side shortfall (target − actual, positive days only) across the month, poor-execution group only. */
-  shortfallUnits: number | null;
-  /** The single central warehouse reading for this SKU (it's one shared pool, not per-store). */
-  warehouseUnits: number | null;
-  /** warehouseUnits ÷ shortfallUnits — how many times over the warehouse could cover it. */
-  coverMultiple: number | null;
+  skuId: string;
+  productName: string;
+  approvedAvailability: number | null;
+  poorAvailability: number | null;
+  /** Warehouse availability for this SKU — one shared pool, not per-group, but reported alongside for context. */
+  whAvailability: number | null;
 };
 
 export type StockSummary = {
-  daily: DailyStockPoint[];
   weekly: WeeklyStockPoint[];
-  avgFillRate: { approved: number | null; poor: number | null };
-  shortfallUnitsPoor: number | null;
-  warehouseUnits: number | null;
-  coverMultiple: number | null;
+  avgStoreAvailability: { approved: number | null; poor: number | null };
+  avgWhAvailability: { approved: number | null; poor: number | null };
   bySku: SkuStockRow[];
 };
 
@@ -184,6 +191,9 @@ export type Verdict = {
   incrementalValueVsLastMonth: number | null;
   poorGmvThisMonth: number | null;
   poorGrowthVsLastMonth: number | null;
+  /** Store counts as of the LATEST week only, matching the diff-in-diff math
+   * above (which is anchored to that week too). For how counts shift across
+   * the month, see ContestMonthReport.weeklyGroupCounts. */
   approvedStoreCount: number;
   poorStoreCount: number;
   controlStoreCount: number;
@@ -201,6 +211,10 @@ export type ContestMonthReport = {
   stores: StoreRow[];
   stock: StockSummary;
   lastYear: LastYearAvailability;
+  /** How many stores were in each group, per week — a store count isn't one
+   * fixed number when groups can change week to week, so this is shown
+   * instead of a single month-level count. */
+  weeklyGroupCounts: WeeklyGroupCounts[];
 };
 
 /** Returned instead of a report when this campaign/month has Status values

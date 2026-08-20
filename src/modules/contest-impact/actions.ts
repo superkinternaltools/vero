@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/core/db/server";
 import { requireAdmin } from "@/core/auth/session";
-import { buildStoreResolver, normalizeName } from "./queries";
+import { buildStoreResolver, normalizeName, getVeroCampaignSyncPreview } from "./queries";
+import type { VeroCampaignSyncPreview } from "./queries";
 import { clearDummyData } from "./seed";
 import type {
   CampaignSourceRow,
@@ -112,15 +113,13 @@ export async function applyInventoryImport(
   const insertRows = rows.map((r) => ({
     month: `${r.month}-01`,
     week: r.week,
-    day: r.day,
     raw_campaign_name: r.campaignName,
     raw_store_name: r.storeName,
     store_id: byStoreName.get(normalizeName(r.storeName)) ?? null,
-    sku_name: r.skuName,
-    target_store_stock: r.targetStoreStock,
-    in_store_stock: r.inStoreStock,
-    target_warehouse_stock: r.targetWarehouseStock,
-    in_warehouse_stock: r.inWarehouseStock,
+    sku_id: r.skuId,
+    product_name: r.productName,
+    store_availability: r.storeAvailability,
+    wh_availability: r.whAvailability,
   }));
 
   const { data: batch, error: batchError } = await supabase
@@ -159,6 +158,79 @@ export async function classifyStatuses(campaignKey: string, classifications: Sta
   if (error) return { error: error.message };
   revalidatePath("/contest-impact");
   return {};
+}
+
+// ==================== Campaign Data — sync from a real Vero campaign ====================
+// An alternative to the CSV upload, not a replacement — pulls Campaign Data
+// straight from a Vero campaign's own tasks + submissions.
+
+export async function previewVeroCampaignSync(campaignId: string, month: string): Promise<VeroCampaignSyncPreview> {
+  await requireAdmin();
+  return getVeroCampaignSyncPreview(campaignId, month);
+}
+
+export async function syncVeroCampaignData(
+  campaignId: string,
+  month: string,
+  classifications: StatusClassification[],
+): Promise<Result & { imported?: number }> {
+  const profile = await requireAdmin();
+  const supabase = await createClient();
+
+  const { data: campaign } = await supabase.from("campaigns").select("name").eq("id", campaignId).single();
+  if (!campaign) return { error: "Campaign not found." };
+  const campaignKey = normalizeName((campaign as any).name);
+
+  if (classifications.length) {
+    const rows = classifications.map((c) => ({
+      campaign_key: campaignKey,
+      raw_status: c.rawStatus,
+      is_approved: c.isApproved,
+    }));
+    const { error: classifyError } = await supabase
+      .from("contest_status_classification")
+      .upsert(rows, { onConflict: "campaign_key,raw_status" });
+    if (classifyError) return { error: classifyError.message };
+  }
+
+  const preview = await getVeroCampaignSyncPreview(campaignId, month);
+  if (!preview.rows.length) return { error: "No reviewed submissions found for this campaign and month." };
+
+  const monthDate = `${month}-01`;
+
+  // Re-syncing replaces exactly this campaign's own rows for this month —
+  // CSV-uploaded rows for other campaigns are untouched.
+  const { error: deleteError } = await supabase
+    .from("contest_campaign_rows")
+    .delete()
+    .eq("campaign_id", campaignId)
+    .eq("month", monthDate);
+  if (deleteError) return { error: deleteError.message };
+
+  const { data: batch, error: batchError } = await supabase
+    .from("contest_data_batches")
+    .insert({ source_type: "campaign", origin: "vero_sync", imported_by: profile.id, row_count: preview.rows.length })
+    .select("id")
+    .single();
+  if (batchError || !batch) return { error: batchError?.message ?? "Could not start import batch." };
+
+  const insertRows = preview.rows.map((r) => ({
+    batch_id: (batch as any).id,
+    month: monthDate,
+    week: r.week,
+    raw_campaign_name: preview.campaignName,
+    raw_store_name: r.storeName,
+    store_id: r.storeId,
+    status: r.status,
+    campaign_id: campaignId,
+  }));
+
+  const { error } = await supabase.from("contest_campaign_rows").insert(insertRows);
+  if (error) return { error: error.message };
+
+  await clearDummyData();
+  revalidatePath("/contest-impact");
+  return { imported: insertRows.length };
 }
 
 // ==================== Sell Side Data ====================
@@ -204,7 +276,9 @@ export async function applySellSideImport(
     this_month_category_contribution: r.thisMonthCategoryContribution,
     last_month_category_contribution: r.lastMonthCategoryContribution,
     last_year_category_contribution: r.lastYearCategoryContribution,
-    in_store_value: r.inStoreValue,
+    this_month_in_store_value: r.thisMonthInStoreValue,
+    last_month_in_store_value: r.lastMonthInStoreValue,
+    last_year_in_store_value: r.lastYearInStoreValue,
   }));
 
   const { data: batch, error: batchError } = await supabase

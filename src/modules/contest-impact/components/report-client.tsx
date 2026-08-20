@@ -214,7 +214,7 @@ function WeeklyChart({
 
 // ==================== stock chart ====================
 
-function StockWeeklyChart({ weekly }: { weekly: { week: number; approvedFillRate: number | null; poorFillRate: number | null }[] }) {
+function StockWeeklyChart({ weekly }: { weekly: { week: number; approvedStoreAvailability: number | null; poorStoreAvailability: number | null }[] }) {
   const [hover, setHover] = useState<{ group: "approved" | "poor"; week: number } | null>(null);
   const W = 620, H = 240, PADX = 55, PADY = 24;
   const min = 0;
@@ -222,8 +222,8 @@ function StockWeeklyChart({ weekly }: { weekly: { week: number; approvedFillRate
   const xFor = (i: number) => (weekly.length > 1 ? PADX + (i * (W - PADX - 20)) / (weekly.length - 1) : W / 2);
   const yFor = (v: number) => H - PADY - ((v - min) / (max - min)) * (H - PADY * 2);
 
-  const approvedPts = weekly.map((w, i) => ({ x: xFor(i), y: w.approvedFillRate != null ? yFor(w.approvedFillRate) : null, week: w.week, value: w.approvedFillRate }));
-  const poorPts = weekly.map((w, i) => ({ x: xFor(i), y: w.poorFillRate != null ? yFor(w.poorFillRate) : null, week: w.week, value: w.poorFillRate }));
+  const approvedPts = weekly.map((w, i) => ({ x: xFor(i), y: w.approvedStoreAvailability != null ? yFor(w.approvedStoreAvailability) : null, week: w.week, value: w.approvedStoreAvailability }));
+  const poorPts = weekly.map((w, i) => ({ x: xFor(i), y: w.poorStoreAvailability != null ? yFor(w.poorStoreAvailability) : null, week: w.week, value: w.poorStoreAvailability }));
 
   return (
     <div className="relative">
@@ -271,7 +271,7 @@ function StockWeeklyChart({ weekly }: { weekly: { week: number; approvedFillRate
             top: `${(yFor((hover.group === "approved" ? approvedPts : poorPts).find((p) => p.week === hover.week)?.value ?? 0) / H) * 100 - 2}%`,
           }}
         >
-          {fmtPercent((hover.group === "approved" ? approvedPts : poorPts).find((p) => p.week === hover.week)?.value ?? null)} fill rate
+          {fmtPercent((hover.group === "approved" ? approvedPts : poorPts).find((p) => p.week === hover.week)?.value ?? null)} availability
         </div>
       )}
     </div>
@@ -298,9 +298,9 @@ function SummaryView({ report, basis, onNavigate }: { report: ContestMonthReport
     control: verdict.controlStoreCount,
   };
   const defn: Record<ContestGroup, string> = {
-    approved: "Campaign ran · latest status classified as approved",
-    poor: "Campaign ran · latest status not classified as approved",
-    control: "No Campaign Data row this month",
+    approved: "Campaign ran · classified as approved as of the latest week",
+    poor: "Campaign ran · not classified as approved as of the latest week",
+    control: "No Campaign Data row as of the latest week",
   };
 
   const incrementalPositive = (verdict.incrementalValueVsLastMonth ?? 0) >= 0;
@@ -334,7 +334,7 @@ function SummaryView({ report, basis, onNavigate }: { report: ContestMonthReport
           >
             <div className="flex items-center justify-between">
               <span className="text-sm font-semibold text-foreground">{GROUP_LABELS[g]}</span>
-              <span className="text-[11px] text-muted-foreground">{counts[g]} stores</span>
+              <span className="text-[11px] text-muted-foreground">{counts[g]} stores (latest wk)</span>
             </div>
             <p className="mt-1 text-[11px] text-muted-foreground">{defn[g]}</p>
             <div className="group/val relative mt-3 inline-block cursor-pointer">
@@ -346,6 +346,35 @@ function SummaryView({ report, basis, onNavigate }: { report: ContestMonthReport
             <p className="text-[11px] text-muted-foreground">avg GMV per store this month</p>
           </button>
         ))}
+      </div>
+
+      <div className="rounded-2xl border border-border bg-card p-5">
+        <h3 className="text-sm font-semibold text-foreground">Store counts by week</h3>
+        <p className="mb-3 mt-1 text-xs text-muted-foreground">
+          A store&apos;s group can change week to week (approved one week, rejected the next) — so this is shown per week rather than one count for the month.
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
+                <th className="px-3 py-2 text-left font-semibold">Group</th>
+                {report.weeklyGroupCounts.map((w) => (
+                  <th key={w.week} className="px-3 py-2 text-right font-semibold">Week {w.week}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {groups.map((g) => (
+                <tr key={g} className="border-b border-border last:border-0">
+                  <td className="px-3 py-2 font-medium" style={{ color: GROUP_COLOR[g] }}>{GROUP_LABELS[g]}</td>
+                  {report.weeklyGroupCounts.map((w) => (
+                    <td key={w.week} className="px-3 py-2 text-right tabular-nums text-foreground">{w[g]}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div className="rounded-2xl border border-border bg-card p-5">
@@ -361,26 +390,25 @@ function SummaryView({ report, basis, onNavigate }: { report: ContestMonthReport
 }
 
 function InventoryCaveat({ report }: { report: ContestMonthReport }) {
-  const { avgFillRate, shortfallUnitsPoor } = report.stock;
-  if (avgFillRate.approved == null || avgFillRate.poor == null) return null;
-  const gap = avgFillRate.approved - avgFillRate.poor;
+  const { avgStoreAvailability } = report.stock;
+  if (avgStoreAvailability.approved == null || avgStoreAvailability.poor == null) return null;
+  const gap = avgStoreAvailability.approved - avgStoreAvailability.poor;
   if (gap < 10) return null;
 
-  const worstWeek = [...report.stock.weekly].sort((a, b) => (a.poorFillRate ?? 100) - (b.poorFillRate ?? 100))[0];
+  const worstWeek = [...report.stock.weekly].sort((a, b) => (a.poorStoreAvailability ?? 100) - (b.poorStoreAvailability ?? 100))[0];
 
   return (
     <div className="mb-5 flex items-start gap-3 rounded-xl border border-warning/40 border-l-[3px] border-l-warning bg-warning/5 p-3.5">
       <span className="mt-0.5 text-base">⚠️</span>
       <p className="text-[12.5px] leading-relaxed text-foreground">
         <b className="text-warning">Inventory caveat:</b> Poor execution stores averaged just{" "}
-        <b className="text-warning">{fmtPercent(avgFillRate.poor)} stock fill</b> this month (vs {fmtPercent(avgFillRate.approved)} for Approved)
-        {worstWeek?.poorFillRate != null && (
+        <b className="text-warning">{fmtPercent(avgStoreAvailability.poor)} store availability</b> this month (vs {fmtPercent(avgStoreAvailability.approved)} for Approved)
+        {worstWeek?.poorStoreAvailability != null && (
           <>
-            , dropping to <b className="text-warning">{fmtPercent(worstWeek.poorFillRate)} in week {worstWeek.week}</b>
+            , dropping to <b className="text-warning">{fmtPercent(worstWeek.poorStoreAvailability)} in week {worstWeek.week}</b>
           </>
         )}
-        . Some of this group&apos;s weaker sales likely reflects empty shelves, not display quality alone
-        {shortfallUnitsPoor != null && <> — {Math.round(shortfallUnitsPoor).toLocaleString("en-IN")} units short of target this month</>}.
+        . Some of this group&apos;s weaker sales likely reflects empty shelves, not display quality alone.
       </p>
     </div>
   );
@@ -424,9 +452,9 @@ function FullDataTable({ report, basis }: { report: ContestMonthReport; basis: C
             );
           })}
           <tr>
-            <td className="px-4 py-2.5 font-medium text-foreground">Store stock fill rate</td>
-            <td className="px-4 py-2.5 text-right tabular-nums font-medium text-foreground">{fmtPercent(report.stock.avgFillRate.approved)}</td>
-            <td className="px-4 py-2.5 text-right tabular-nums font-medium text-foreground">{fmtPercent(report.stock.avgFillRate.poor)}</td>
+            <td className="px-4 py-2.5 font-medium text-foreground">Store availability</td>
+            <td className="px-4 py-2.5 text-right tabular-nums font-medium text-foreground">{fmtPercent(report.stock.avgStoreAvailability.approved)}</td>
+            <td className="px-4 py-2.5 text-right tabular-nums font-medium text-foreground">{fmtPercent(report.stock.avgStoreAvailability.poor)}</td>
             <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">no data</td>
           </tr>
         </tbody>
@@ -466,17 +494,15 @@ function MetricsView({ report, basis }: { report: ContestMonthReport; basis: Com
 
       <div className="rounded-2xl border border-border bg-card p-5">
         <h3 className="text-sm font-semibold text-foreground">Stock &amp; inventory status</h3>
-        <p className="mb-4 mt-1 text-xs text-muted-foreground">In-store fill rate by week, against the 100% target. Control carries no inventory data.</p>
+        <p className="mb-4 mt-1 text-xs text-muted-foreground">
+          Store and warehouse availability by week, as reported directly on the sheet. Control carries no inventory data.
+        </p>
 
         <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <StatBox label="Approved avg fill" value={fmtPercent(report.stock.avgFillRate.approved)} />
-          <StatBox label="Poor avg fill" value={fmtPercent(report.stock.avgFillRate.poor)} warn />
-          <StatBox label="Shortfall units (poor)" value={report.stock.shortfallUnitsPoor != null ? Math.round(report.stock.shortfallUnitsPoor).toLocaleString("en-IN") : "—"} warn />
-          <StatBox
-            label="Warehouse cover"
-            value={report.stock.coverMultiple != null ? `${report.stock.coverMultiple.toFixed(1)}×` : "—"}
-            sub="warehouse ÷ shortfall"
-          />
+          <StatBox label="Approved avg store availability" value={fmtPercent(report.stock.avgStoreAvailability.approved)} />
+          <StatBox label="Poor avg store availability" value={fmtPercent(report.stock.avgStoreAvailability.poor)} warn />
+          <StatBox label="Approved avg WH availability" value={fmtPercent(report.stock.avgWhAvailability.approved)} />
+          <StatBox label="Poor avg WH availability" value={fmtPercent(report.stock.avgWhAvailability.poor)} warn />
         </div>
 
         <div className="mb-3 flex gap-4 text-xs text-muted-foreground">
@@ -514,7 +540,9 @@ function StoresView({ report, basis }: { report: ContestMonthReport; basis: Comp
     <div className="rounded-2xl border border-border bg-card">
       <div className="p-5 pb-3">
         <h3 className="text-sm font-semibold text-foreground">Store performance</h3>
-        <p className="mt-1 text-xs text-muted-foreground">Every store, grouped by execution outcome, ranked by GMV growth {fmtMonthLabel(basis)}.</p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Every store, ranked by GMV growth {fmtMonthLabel(basis)}. Group is shown per week — it can change month to month, and even week to week.
+        </p>
         <div className="mt-3"><GroupLegend /></div>
       </div>
       <div className="max-h-[600px] overflow-y-auto">
@@ -522,15 +550,21 @@ function StoresView({ report, basis }: { report: ContestMonthReport; basis: Comp
           const growth = basis === "lastMonth" ? s.gmvGrowthVsLastMonth : s.gmvGrowthVsLastYear;
           return (
             <div key={s.storeId} className="flex flex-wrap items-center gap-3 border-b border-border px-5 py-3 last:border-0">
-              <span
-                className="min-w-[110px] rounded-md px-2 py-1 text-center text-[11px] font-medium"
-                style={{ background: `color-mix(in srgb, ${GROUP_COLOR[s.group]} 12%, transparent)`, color: GROUP_COLOR[s.group] }}
-              >
-                {GROUP_LABELS[s.group]}
-              </span>
+              <div className="flex min-w-[130px] gap-1">
+                {s.statusByWeek.map((sw) => (
+                  <span
+                    key={sw.week}
+                    title={`Week ${sw.week}: ${sw.status ?? "no campaign data"}`}
+                    className="rounded-md px-1.5 py-1 text-center text-[10px] font-semibold"
+                    style={{ background: `color-mix(in srgb, ${GROUP_COLOR[sw.group]} 14%, transparent)`, color: GROUP_COLOR[sw.group] }}
+                  >
+                    W{sw.week}
+                  </span>
+                ))}
+              </div>
               <div className="min-w-[180px] flex-1">
                 <p className="text-sm font-medium text-foreground">{s.storeName}</p>
-                <p className="text-[11px] text-muted-foreground">{s.latestStatus ? `Status: ${s.latestStatus}` : "No campaign data"}</p>
+                <p className="text-[11px] text-muted-foreground">{s.latestStatus ? `Latest: ${s.latestStatus}` : "No campaign data"}</p>
               </div>
               <div className="text-right">
                 <p className="text-sm font-semibold tabular-nums text-foreground">{fmtINR(s.gmv)}</p>
@@ -541,7 +575,7 @@ function StoresView({ report, basis }: { report: ContestMonthReport; basis: Comp
               </div>
               {s.group !== "control" && (
                 <div className="min-w-[80px] text-right text-xs text-muted-foreground">
-                  {fmtPercent(s.storeStockFillRate)} fill
+                  {fmtPercent(s.storeAvailability)} avail.
                 </div>
               )}
             </div>
@@ -575,7 +609,7 @@ function ExecutionView({ report, basis }: { report: ContestMonthReport; basis: C
 
   const maxAbs = Math.max(1, ...byStatus.map((s) => Math.abs(s.median ?? 0)));
 
-  const scatterPoints = report.stores.filter((s) => s.group !== "control" && s.storeStockFillRate != null);
+  const scatterPoints = report.stores.filter((s) => s.group !== "control" && s.storeAvailability != null);
   const growthOf = (s: StoreRow) => (basis === "lastMonth" ? s.gmvGrowthVsLastMonth : s.gmvGrowthVsLastYear);
   const scatterGrowths = scatterPoints.map(growthOf).filter((v): v is number => v != null);
   const gMin = Math.min(0, ...scatterGrowths);
@@ -614,28 +648,28 @@ function ExecutionView({ report, basis }: { report: ContestMonthReport; basis: C
       </div>
 
       <div className="rounded-2xl border border-border bg-card p-5">
-        <h3 className="text-sm font-semibold text-foreground">Stock fill rate vs sales growth</h3>
+        <h3 className="text-sm font-semibold text-foreground">Store availability vs sales growth</h3>
         <p className="mb-4 mt-1 text-xs text-muted-foreground">Each dot is one store that ran the campaign — does poor execution track with poor stock availability?</p>
         <svg viewBox={`0 0 ${SW} ${SH}`} className="h-auto w-full">
           <line x1={SPADX} x2={SW - 10} y1={SH - SPADY} y2={SH - SPADY} stroke="var(--color-border)" strokeWidth={1} />
           <line x1={SPADX} x2={SPADX} y1={10} y2={SH - SPADY} stroke="var(--color-border)" strokeWidth={1} />
           <text x={SPADX - 8} y={16} fontSize={10} textAnchor="end" fill="var(--color-muted-foreground)">{fmtGrowth(gMax, "currency")}</text>
           <text x={SPADX - 8} y={SH - SPADY} fontSize={10} textAnchor="end" fill="var(--color-muted-foreground)">{fmtGrowth(gMin, "currency")}</text>
-          <text x={SPADX} y={SH - 4} fontSize={10} fill="var(--color-muted-foreground)">0% fill</text>
-          <text x={SW - 10} y={SH - 4} fontSize={10} textAnchor="end" fill="var(--color-muted-foreground)">100% fill</text>
+          <text x={SPADX} y={SH - 4} fontSize={10} fill="var(--color-muted-foreground)">0% available</text>
+          <text x={SW - 10} y={SH - 4} fontSize={10} textAnchor="end" fill="var(--color-muted-foreground)">100% available</text>
           {scatterPoints.map((s) => {
             const g = growthOf(s);
-            if (g == null || s.storeStockFillRate == null) return null;
+            if (g == null || s.storeAvailability == null) return null;
             return (
               <circle
                 key={s.storeId}
-                cx={xFor(s.storeStockFillRate)}
+                cx={xFor(s.storeAvailability)}
                 cy={yFor(g)}
                 r={5}
                 fill={GROUP_COLOR[s.group]}
                 opacity={0.8}
               >
-                <title>{`${s.storeName}: ${fmtPercent(s.storeStockFillRate)} fill, ${fmtGrowth(g, "currency")}`}</title>
+                <title>{`${s.storeName}: ${fmtPercent(s.storeAvailability)} available, ${fmtGrowth(g, "currency")}`}</title>
               </circle>
             );
           })}

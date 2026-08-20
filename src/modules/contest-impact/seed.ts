@@ -67,27 +67,26 @@ export async function ensureDummyData(): Promise<void> {
           this_month_category_contribution: Number((0.2 + (boost - 1) * 0.2).toFixed(4)),
           last_month_category_contribution: 0.2,
           last_year_category_contribution: 0.2,
-          in_store_value: gmv * 3,
+          this_month_in_store_value: gmv * 3,
+          last_month_in_store_value: lastMonthGmv * 3,
+          last_year_in_store_value: lastMonthGmv * 3,
         });
 
-        for (const sku of DUMMY_SKUS) {
-          const targetStore = 20;
-          const inStore = Math.round(targetStore * (status ? boost * 0.75 : 0.55) * (0.85 + Math.random() * 0.3));
-          const targetWh = 100;
-          const inWh = Math.round(targetWh * (status ? boost * 0.8 : 0.6) * (0.85 + Math.random() * 0.3));
+        DUMMY_SKUS.forEach((sku, skuIdx) => {
+          const storeAvailability = Math.min(100, Math.round((status ? boost * 75 : 55) * (0.85 + Math.random() * 0.3)));
+          const whAvailability = Math.min(100, Math.round((status ? boost * 80 : 60) * (0.85 + Math.random() * 0.3)));
           inventoryRows.push({
             month: `${month}-01`,
             week,
             raw_campaign_name: DUMMY_CAMPAIGN,
             raw_store_name: store.name,
             store_id: store.id,
-            sku_name: sku,
-            target_store_stock: targetStore,
-            in_store_stock: inStore,
-            target_warehouse_stock: targetWh,
-            in_warehouse_stock: inWh,
+            sku_id: `DUMMY-${skuIdx}`,
+            product_name: sku,
+            store_availability: storeAvailability,
+            wh_availability: whAvailability,
           });
-        }
+        });
       });
     }
   }

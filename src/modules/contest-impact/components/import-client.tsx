@@ -5,7 +5,7 @@ import { Upload } from "lucide-react";
 import { SelectSearch } from "@/core/ui/select-search";
 import { Button } from "@/core/ui/button";
 import { cn } from "@/core/lib/utils";
-import { parseCsv, normalizeHeader, parseNumber, parseMonth, parseSheetDate } from "../csv";
+import { parseCsv, normalizeHeader, parseNumber, parseMonth } from "../csv";
 import {
   validateCampaignImport,
   applyCampaignImport,
@@ -14,6 +14,8 @@ import {
   validateSellSideImport,
   applySellSideImport,
 } from "../actions";
+import { VeroCampaignSyncCard } from "./vero-campaign-sync-card";
+import type { VeroCampaignOption } from "../queries";
 import type {
   CampaignSourceRow,
   InventorySourceRow,
@@ -75,22 +77,15 @@ const INVENTORY_HEADERS: Record<string, string> = {
   campaign_name: "campaignName",
   campaign: "campaignName",
   execution_brand: "campaignName",
-  sku_name: "skuName",
-  sku: "skuName",
-  // The inventory sheet carries a real date per row where the other two
-  // carry a week number — month and week get derived from it below.
-  day: "date",
-  date: "date",
-  target_store_stock: "targetStoreStock",
-  in_store_stock: "inStoreStock",
-  target_warehouse_stock: "targetWarehouseStock",
-  in_warehouse_stock: "inWarehouseStock",
+  sku_id: "skuId",
+  product_name: "productName",
+  sku_name: "productName",
+  store_availability: "storeAvailability",
+  wh_availability: "whAvailability",
+  warehouse_availability: "whAvailability",
 };
 
-function parseInventoryRows(
-  text: string,
-  year: number,
-): { rows: InventorySourceRow[]; error: string | null; skippedAfterCutoff?: number } {
+function parseInventoryRows(text: string, year: number): { rows: InventorySourceRow[]; error: string | null } {
   const table = parseCsv(text);
   if (table.length < 2) return { rows: [], error: "No data rows found." };
   const header = table[0].map(normalizeHeader);
@@ -99,63 +94,27 @@ function parseInventoryRows(
     const key = INVENTORY_HEADERS[h];
     if (key) idx.set(key, i);
   });
-
-  // A `Day` column supplies month and week on its own, so neither is required
-  // when it's present — that's the shape the inventory sheet actually has.
-  const hasDate = idx.has("date");
-  const required = hasDate
-    ? ["date", "storeName", "campaignName", "skuName"]
-    : ["month", "week", "storeName", "campaignName", "skuName"];
+  const required = ["month", "week", "storeName", "campaignName", "skuId", "productName"];
   const missing = required.filter((k) => !idx.has(k));
-  if (missing.length) {
-    return {
-      rows: [],
-      error: `Missing column(s): ${missing.join(", ")}. Inventory needs either a Day column, or Month plus Week.`,
-    };
-  }
+  if (missing.length) return { rows: [], error: `Missing column(s): ${missing.join(", ")}` };
 
   const get = (r: string[], key: string) => (idx.has(key) ? (r[idx.get(key)!] ?? "") : "");
-  let badDates = 0;
-  let afterCutoff = 0;
   const rows = table
     .slice(1)
-    .map((r): InventorySourceRow => {
-      let month = "";
-      let week = 0;
-      let day: string | null = null;
-      if (hasDate) {
-        const raw = get(r, "date").trim();
-        const d = parseSheetDate(raw);
-        if (raw && !d) badDates += 1;
-        // A contest month ends on the 28th, so days 29–31 have no week to
-        // belong to and are counted out rather than folded into week 4.
-        if (d && d.week === null) afterCutoff += 1;
-        month = d?.month ?? "";
-        week = d?.week ?? 0;
-        day = d?.iso ?? null;
-      } else {
-        month = parseMonth(get(r, "month"), year) ?? "";
-        week = Number(get(r, "week")) || 0;
-      }
-      return {
-        month,
-        week,
-        day,
+    .map(
+      (r): InventorySourceRow => ({
+        month: parseMonth(get(r, "month"), year) ?? "",
+        week: Number(get(r, "week")) || 0,
         storeName: get(r, "storeName").trim(),
         campaignName: get(r, "campaignName").trim(),
-        skuName: get(r, "skuName").trim(),
-        targetStoreStock: parseNumber(get(r, "targetStoreStock")),
-        inStoreStock: parseNumber(get(r, "inStoreStock")),
-        targetWarehouseStock: parseNumber(get(r, "targetWarehouseStock")),
-        inWarehouseStock: parseNumber(get(r, "inWarehouseStock")),
-      };
-    })
-    .filter((r) => r.storeName && r.campaignName && r.skuName && r.month && r.week);
-
-  if (badDates) {
-    return { rows: [], error: `${badDates} row(s) have a Day value that couldn't be read. Expected e.g. "13 Jul, 2026".` };
-  }
-  return { rows, error: null, skippedAfterCutoff: afterCutoff };
+        skuId: get(r, "skuId").trim(),
+        productName: get(r, "productName").trim(),
+        storeAvailability: parseNumber(get(r, "storeAvailability")),
+        whAvailability: parseNumber(get(r, "whAvailability")),
+      }),
+    )
+    .filter((r) => r.storeName && r.campaignName && r.skuId && r.productName && r.month && r.week && r.week <= 4);
+  return { rows, error: null };
 }
 
 const SELL_SIDE_HEADERS: Record<string, string> = {
@@ -170,19 +129,27 @@ const SELL_SIDE_HEADERS: Record<string, string> = {
   this_month_gmv: "thisMonthGmv",
   last_month_gmv: "lastMonthGmv",
   last_year_gmv: "lastYearGmv",
+  this_month_last_year_gmv: "lastYearGmv",
   this_month_customer_penetration: "thisMonthPenetration",
   this_month_penetration: "thisMonthPenetration",
   last_month_customer_penetration: "lastMonthPenetration",
   last_month_penetration: "lastMonthPenetration",
   last_year_customer_penetration: "lastYearPenetration",
   last_year_penetration: "lastYearPenetration",
+  this_month_last_year_customer_penetration: "lastYearPenetration",
   this_month_avg_unit: "thisMonthAvgUnit",
   last_month_avg_unit: "lastMonthAvgUnit",
   last_year_avg_unit: "lastYearAvgUnit",
+  this_month_last_year_avg_unit: "lastYearAvgUnit",
   this_month_category_contribution: "thisMonthCategoryContribution",
   last_month_category_contribution: "lastMonthCategoryContribution",
   last_year_category_contribution: "lastYearCategoryContribution",
-  in_store_value: "inStoreValue",
+  this_month_last_year_category_contribution: "lastYearCategoryContribution",
+  in_store_value: "thisMonthInStoreValue",
+  this_month_in_store_value: "thisMonthInStoreValue",
+  last_month_in_store_value: "lastMonthInStoreValue",
+  last_year_in_store_value: "lastYearInStoreValue",
+  this_month_last_year_in_store_value: "lastYearInStoreValue",
 };
 
 function parseSellSideRows(text: string, year: number): { rows: SellSideSourceRow[]; error: string | null } {
@@ -218,7 +185,9 @@ function parseSellSideRows(text: string, year: number): { rows: SellSideSourceRo
         thisMonthCategoryContribution: parseNumber(get(r, "thisMonthCategoryContribution")),
         lastMonthCategoryContribution: parseNumber(get(r, "lastMonthCategoryContribution")),
         lastYearCategoryContribution: parseNumber(get(r, "lastYearCategoryContribution")),
-        inStoreValue: parseNumber(get(r, "inStoreValue")),
+        thisMonthInStoreValue: parseNumber(get(r, "thisMonthInStoreValue")),
+        lastMonthInStoreValue: parseNumber(get(r, "lastMonthInStoreValue")),
+        lastYearInStoreValue: parseNumber(get(r, "lastYearInStoreValue")),
       }),
     )
     .filter((r) => r.storeName && r.campaignName && r.month && r.week && r.week <= 4);
@@ -276,7 +245,7 @@ function SourceImportCard<T extends { storeName: string }>({
   description: string;
   headers: string[];
   stores: NameOption[];
-  parseRows: (text: string, year: number) => { rows: T[]; error: string | null; skippedAfterCutoff?: number };
+  parseRows: (text: string, year: number) => { rows: T[]; error: string | null };
   validateAction: (rows: T[]) => Promise<Preview>;
   applyAction: (rows: T[], mappings: Record<string, string>) => Promise<{ error?: string; imported?: number }>;
 }) {
@@ -286,7 +255,6 @@ function SourceImportCard<T extends { storeName: string }>({
   const [preview, setPreview] = useState<Preview | null>(null);
   const [storeMappings, setStoreMappings] = useState<Record<string, string>>({});
   const [result, setResult] = useState<string | null>(null);
-  const [skipped, setSkipped] = useState(0);
   const [isPending, startTransition] = useTransition();
   // The sheets say "July" with no year, so it has to be supplied once per
   // upload. Ignored when a column already carries a full date.
@@ -298,9 +266,8 @@ function SourceImportCard<T extends { storeName: string }>({
     const reader = new FileReader();
     reader.onload = () => {
       const text = String(reader.result ?? "");
-      const { rows: parsed, error, skippedAfterCutoff } = parseRows(text, year);
+      const { rows: parsed, error } = parseRows(text, year);
       setParseError(error);
-      setSkipped(skippedAfterCutoff ?? 0);
       setRows(parsed);
       setPreview(null);
       if (!error && parsed.length) {
@@ -391,12 +358,6 @@ function SourceImportCard<T extends { storeName: string }>({
       </div>
 
       {parseError && <p className="mt-3 text-sm text-danger">{parseError}</p>}
-      {!parseError && skipped > 0 && (
-        <p className="mt-3 text-sm text-warning">
-          {skipped} row{skipped === 1 ? "" : "s"} fell after the 28th and {skipped === 1 ? "was" : "were"} skipped — a
-          contest month runs to the 28th, so those days have no week to belong to.
-        </p>
-      )}
       {result && <p className="mt-3 text-sm font-medium text-foreground">{result}</p>}
 
       {preview && (
@@ -439,7 +400,7 @@ function SourceImportCard<T extends { storeName: string }>({
 
 // ==================== page ====================
 
-export function ImportClient({ stores }: { stores: NameOption[] }) {
+export function ImportClient({ stores, veroCampaigns }: { stores: NameOption[]; veroCampaigns: VeroCampaignOption[] }) {
   return (
     <div>
       <div>
@@ -459,10 +420,20 @@ export function ImportClient({ stores }: { stores: NameOption[] }) {
           validateAction={validateCampaignImport}
           applyAction={applyCampaignImport}
         />
+        <VeroCampaignSyncCard campaigns={veroCampaigns} />
         <SourceImportCard<InventorySourceRow>
           title="Inventory Data"
-          description="One row per store, per SKU, per day. Day supplies the month and week — a separate Week column isn't needed."
-          headers={["Month", "Day", "Store Name", "Campaign Name", "SKU Name", "Target Store Stock", "In Store Stock", "In Warehouse Stock"]}
+          description="One row per store, per SKU, per week — store and warehouse availability as a percentage."
+          headers={[
+            "month",
+            "week",
+            "execution_brand",
+            "store_name",
+            "sku_id",
+            "product_name",
+            "store_availability",
+            "wh_availability",
+          ]}
           stores={stores}
           parseRows={parseInventoryRows}
           validateAction={validateInventoryImport}
@@ -470,25 +441,27 @@ export function ImportClient({ stores }: { stores: NameOption[] }) {
         />
         <SourceImportCard<SellSideSourceRow>
           title="Sell Side Data"
-          description="One row per store, per campaign, per week — GMV, penetration, average unit, category contribution."
+          description="One row per store, per campaign, per week — GMV, penetration, average unit, category contribution, in-store value."
           headers={[
-            "month",
+            "Month",
             "week_of_month",
             "execution_brand",
             "store_name",
             "this_month_gmv",
             "last_month_gmv",
-            "last_year_gmv",
+            "this_month_last_year_gmv",
             "this_month_customer_penetration",
             "last_month_customer_penetration",
-            "last_year_customer_penetration",
+            "this_month_last_year_customer_penetration",
             "this_month_avg_unit",
             "last_month_avg_unit",
-            "last_year_avg_unit",
+            "this_month_last_year_avg_unit",
             "this_month_category_contribution",
             "last_month_category_contribution",
-            "last_year_category_contribution",
-            "in_store_value",
+            "this_month_last_year_category_contribution",
+            "this_month_in_store_value",
+            "last_month_in_store_value",
+            "this_month_last_year_in_store_value",
           ]}
           stores={stores}
           parseRows={parseSellSideRows}
