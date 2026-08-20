@@ -89,20 +89,33 @@ export type GroupValues<T> = Record<ContestGroup, T>;
 
 export type StatusClassification = { rawStatus: string; isApproved: boolean };
 
-export type SellMetricKey = "gmv" | "penetration" | "avgUnit" | "categoryContribution";
+export type SellMetricKey = "gmv" | "penetration" | "avgUnit" | "categoryContribution" | "inStoreValue" | "sellThrough" | "doh";
 
 /** How a metric is formatted and how its growth is expressed — every metric
  * is now averaged across the stores in a group (see queries.ts `aggregate`),
- * so this only controls display: currency symbol, percent sign, or a plain
- * number, and whether a change is a percentage-point diff or a percent
- * change. */
-export type MetricKind = "currency" | "percent" | "number";
+ * so this only controls display: currency symbol, percent sign, a plain
+ * number, a turnover ratio (e.g. "1.4x"), or a day count, and whether a
+ * change is a percentage-point diff or a percent change. */
+export type MetricKind = "currency" | "percent" | "number" | "ratio" | "days";
 
 export const SELL_METRICS: { key: SellMetricKey; label: string; what: string; kind: MetricKind }[] = [
   { key: "gmv", label: "Sales (GMV)", what: "Average rupee sales per store in the group.", kind: "currency" },
   { key: "penetration", label: "Customer penetration", what: "Share of footfall buying this category, averaged across stores.", kind: "percent" },
   { key: "avgUnit", label: "Avg unit", what: "Average units per bill, averaged across stores.", kind: "number" },
   { key: "categoryContribution", label: "Category contribution", what: "Category's share of total store sales, averaged across stores.", kind: "percent" },
+  { key: "inStoreValue", label: "In-store value", what: "Average rupee value of stock on shelf per store, per week (a daily average across the week).", kind: "currency" },
+  {
+    key: "sellThrough",
+    label: "Sell-through",
+    what: "GMV as a share of the stock that was on shelf that week — a turnover ratio, not a capacity percentage, so it can exceed 1x when stock moves fast.",
+    kind: "ratio",
+  },
+  {
+    key: "doh",
+    label: "Days of hand",
+    what: "7 × in-store value ÷ GMV — how many days the current shelf stock would last at that week's sales pace. The exact reciprocal of sell-through, scaled to days: a high number means slow-moving, overstocked; a low number means fast-moving.",
+    kind: "days",
+  },
 ];
 
 export type ComparisonBasis = "lastMonth" | "lastYear";
@@ -153,15 +166,27 @@ export type StoreRow = {
   hasLastYearData: boolean;
   /** Average of this store's SKU-level store_availability rows this month — already a 0–100 percentage on the sheet. */
   storeAvailability: number | null;
+  /** Average rupee value of stock on this store's shelf, per week this month. */
+  inStoreValue: number | null;
+  /** gmv ÷ inStoreValue — this store's own turnover ratio, not capped at 1x. */
+  sellThrough: number | null;
+  /** 7 × inStoreValue ÷ gmv — this store's own days-of-hand, the reciprocal of sellThrough in days. */
+  doh: number | null;
 };
 
-/** Store and warehouse availability for approved vs poor-execution stores —
- * control stores carry no Inventory Data at all, so there's no third line. */
+/** Store availability by group, per week — control stores carry no Inventory
+ * Data at all, so there's no third line. Total is every contest store
+ * (approved + poor) combined, not a fourth independent group. */
 export type WeeklyStockPoint = {
   week: number;
+  totalStoreAvailability: number | null;
   approvedStoreAvailability: number | null;
   poorStoreAvailability: number | null;
 };
+
+/** Warehouse is one shared pool, not attributed to a store or group — a
+ * single week-on-week line, not three. */
+export type WeeklyWarehousePoint = { week: number; whAvailability: number | null };
 
 export type SkuStockRow = {
   skuId: string;
@@ -174,8 +199,10 @@ export type SkuStockRow = {
 
 export type StockSummary = {
   weekly: WeeklyStockPoint[];
-  avgStoreAvailability: { approved: number | null; poor: number | null };
-  avgWhAvailability: { approved: number | null; poor: number | null };
+  weeklyWarehouse: WeeklyWarehousePoint[];
+  avgStoreAvailability: { total: number | null; approved: number | null; poor: number | null };
+  /** A single figure — warehouse availability isn't split by group. */
+  avgWhAvailability: number | null;
   bySku: SkuStockRow[];
 };
 

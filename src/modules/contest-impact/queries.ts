@@ -1,4 +1,6 @@
 import { createClient } from "@/core/db/server";
+import { computeHeadlineFingerprint, generateContestHeadline } from "./headline";
+import type { ContestHeadline } from "./headline";
 import { SELL_METRICS } from "./types";
 import type {
   NameOption,
@@ -14,6 +16,7 @@ import type {
   StoreRow,
   StoreStatusWeek,
   WeeklyStockPoint,
+  WeeklyWarehousePoint,
 } from "./types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -226,7 +229,10 @@ function growthFor(thisVal: number | null, lastVal: number | null, kind: MetricK
   return ((thisVal - lastVal) / Math.abs(lastVal)) * 100;
 }
 
-const FIELD_BY_METRIC: Record<SellMetricKey, { this: string; lastMonth: string; lastYear: string }> = {
+/** Metrics read straight off a sell-side column — sellThrough and doh are
+ * deliberately NOT here, since they're ratios derived from two of these, not
+ * a column of their own (see the sell-through/doh block in getContestMonthReport). */
+const DIRECT_FIELD_BY_METRIC: Record<Exclude<SellMetricKey, "sellThrough" | "doh">, { this: string; lastMonth: string; lastYear: string }> = {
   gmv: { this: "this_month_gmv", lastMonth: "last_month_gmv", lastYear: "last_year_gmv" },
   penetration: { this: "this_month_penetration", lastMonth: "last_month_penetration", lastYear: "last_year_penetration" },
   avgUnit: { this: "this_month_avg_unit", lastMonth: "last_month_avg_unit", lastYear: "last_year_avg_unit" },
@@ -235,9 +241,28 @@ const FIELD_BY_METRIC: Record<SellMetricKey, { this: string; lastMonth: string; 
     lastMonth: "last_month_category_contribution",
     lastYear: "last_year_category_contribution",
   },
+  inStoreValue: { this: "this_month_in_store_value", lastMonth: "last_month_in_store_value", lastYear: "last_year_in_store_value" },
 };
 
 const GROUPS: ContestGroup[] = ["approved", "poor", "control"];
+
+/** "Month" is the average across the weeks we have data for — never a sum.
+ * GMV and in-store value are flows/levels where summing would break a later
+ * ratio (sell-through); the rate metrics would double-count a re-measured
+ * week if summed. Averaging is correct for all of them. */
+function avgAcrossWeeks(weekly: MetricWeekPoint[], pick: (w: MetricWeekPoint) => GroupValues<number | null>): GroupValues<number | null> {
+  const out = emptyGroupValues<number | null>(null);
+  for (const g of GROUPS) out[g] = aggregate(weekly.map((w) => pick(w)[g]).filter((v): v is number => v != null));
+  return out;
+}
+
+/** Observation counts genuinely accumulate — 8 store-weeks in week 1 plus 8
+ * in week 2 really is 16 observations — so this sums, unlike the value itself. */
+function sumWeeklyN(weekly: MetricWeekPoint[]): GroupValues<number> {
+  const out = emptyGroupValues<number>(0);
+  for (const g of GROUPS) out[g] = weekly.reduce((acc, w) => acc + w.n[g], 0);
+  return out;
+}
 
 function emptyGroupValues<T>(fill: T): GroupValues<T> {
   return { approved: fill, poor: fill, control: fill };
@@ -376,10 +401,10 @@ export async function getContestMonthReport(campaignKey: string, month: string):
 
   // ---- sell-side metrics: hard-number group averages per week ----
   const weeks = [...new Set(sell.map((r) => r.week))].sort((a, b) => a - b);
-  const lastWeek = weeks[weeks.length - 1];
 
-  const metrics: MetricSeries[] = SELL_METRICS.map(({ key }) => {
-    const fields = FIELD_BY_METRIC[key];
+  const directMetrics: MetricSeries[] = (Object.keys(DIRECT_FIELD_BY_METRIC) as Exclude<SellMetricKey, "sellThrough" | "doh">[]).map((key) => {
+    const fields = DIRECT_FIELD_BY_METRIC[key];
+    const kind = SELL_METRICS.find((m) => m.key === key)!.kind;
 
     const weekly: MetricWeekPoint[] = weeks.map((week) => {
       const rowsThisWeek = sell.filter((r) => r.week === week);
@@ -398,7 +423,6 @@ export async function getContestMonthReport(campaignKey: string, month: string):
         const lmAgg = aggregate(lmVals);
         const lyAgg = aggregate(lyVals);
 
-        const kind = SELL_METRICS.find((m) => m.key === key)!.kind;
         value[g] = thisAgg;
         growthVsLastMonth[g] = growthFor(thisAgg, lmAgg, kind);
         growthVsLastYear[g] = growthFor(thisAgg, lyAgg, kind);
@@ -408,25 +432,100 @@ export async function getContestMonthReport(campaignKey: string, month: string):
       return { week, value, growthVsLastMonth, growthVsLastYear, n };
     });
 
-    const monthPoint = weekly.find((w) => w.week === lastWeek);
     return {
       key,
       weekly,
-      monthAvg: monthPoint?.value ?? emptyGroupValues<number | null>(null),
-      monthGrowthVsLastMonth: monthPoint?.growthVsLastMonth ?? emptyGroupValues<number | null>(null),
-      monthGrowthVsLastYear: monthPoint?.growthVsLastYear ?? emptyGroupValues<number | null>(null),
-      monthN: monthPoint?.n ?? emptyGroupValues<number>(0),
+      monthAvg: avgAcrossWeeks(weekly, (w) => w.value),
+      monthGrowthVsLastMonth: avgAcrossWeeks(weekly, (w) => w.growthVsLastMonth),
+      monthGrowthVsLastYear: avgAcrossWeeks(weekly, (w) => w.growthVsLastYear),
+      monthN: sumWeeklyN(weekly),
     };
   });
+
+  // ---- sell-through & days of hand: both derived from the same GMV vs.
+  // in-store-value comparison, recomputed from raw rows since they need
+  // last-month and last-year VALUES (to build the comparison ratio), not
+  // just the already-summarized growth% the direct metrics above retain.
+  // doh = 7 × stock ÷ gmv is the exact reciprocal of sellThrough (gmv ÷
+  // stock), scaled to days — computed in the same pass since both need the
+  // same aggregated GMV/stock figures, but growth is computed on each
+  // metric's own values (a reciprocal's % growth isn't just the negation of
+  // the original's). ----
+  const sellThroughWeekly: MetricWeekPoint[] = [];
+  const dohWeekly: MetricWeekPoint[] = [];
+  for (const week of weeks) {
+    const rowsThisWeek = sell.filter((r) => r.week === week);
+    const stValue = emptyGroupValues<number | null>(null);
+    const stGrowthVsLastMonth = emptyGroupValues<number | null>(null);
+    const stGrowthVsLastYear = emptyGroupValues<number | null>(null);
+    const dohValue = emptyGroupValues<number | null>(null);
+    const dohGrowthVsLastMonth = emptyGroupValues<number | null>(null);
+    const dohGrowthVsLastYear = emptyGroupValues<number | null>(null);
+    const n = emptyGroupValues<number>(0);
+
+    const sellThroughRatio = (gmv: number | null, stock: number | null) => (gmv != null && stock != null && stock !== 0 ? gmv / stock : null);
+    const dohRatio = (gmv: number | null, stock: number | null) => (gmv != null && stock != null && gmv !== 0 ? (stock / gmv) * 7 : null);
+
+    for (const g of GROUPS) {
+      const rowsInGroup = rowsThisWeek.filter((r) => groupOfWeek(r.store_id, week) === g);
+      const thisGmv = aggregate(rowsInGroup.map((r) => r.this_month_gmv).filter((v): v is number => v != null));
+      const thisStock = aggregate(rowsInGroup.map((r) => r.this_month_in_store_value).filter((v): v is number => v != null));
+      const lmGmv = aggregate(rowsInGroup.map((r) => r.last_month_gmv).filter((v): v is number => v != null));
+      const lmStock = aggregate(rowsInGroup.map((r) => r.last_month_in_store_value).filter((v): v is number => v != null));
+      const lyGmv = aggregate(rowsInGroup.map((r) => r.last_year_gmv).filter((v): v is number => v != null));
+      const lyStock = aggregate(rowsInGroup.map((r) => r.last_year_in_store_value).filter((v): v is number => v != null));
+
+      const thisSt = sellThroughRatio(thisGmv, thisStock);
+      stValue[g] = thisSt;
+      stGrowthVsLastMonth[g] = growthFor(thisSt, sellThroughRatio(lmGmv, lmStock), "ratio");
+      stGrowthVsLastYear[g] = growthFor(thisSt, sellThroughRatio(lyGmv, lyStock), "ratio");
+
+      const thisDoh = dohRatio(thisGmv, thisStock);
+      dohValue[g] = thisDoh;
+      dohGrowthVsLastMonth[g] = growthFor(thisDoh, dohRatio(lmGmv, lmStock), "days");
+      dohGrowthVsLastYear[g] = growthFor(thisDoh, dohRatio(lyGmv, lyStock), "days");
+
+      n[g] = rowsInGroup.filter((r) => r.this_month_gmv != null && r.this_month_in_store_value != null).length;
+    }
+
+    sellThroughWeekly.push({ week, value: stValue, growthVsLastMonth: stGrowthVsLastMonth, growthVsLastYear: stGrowthVsLastYear, n });
+    dohWeekly.push({ week, value: dohValue, growthVsLastMonth: dohGrowthVsLastMonth, growthVsLastYear: dohGrowthVsLastYear, n });
+  }
+
+  const sellThroughSeries: MetricSeries = {
+    key: "sellThrough",
+    weekly: sellThroughWeekly,
+    monthAvg: avgAcrossWeeks(sellThroughWeekly, (w) => w.value),
+    monthGrowthVsLastMonth: avgAcrossWeeks(sellThroughWeekly, (w) => w.growthVsLastMonth),
+    monthGrowthVsLastYear: avgAcrossWeeks(sellThroughWeekly, (w) => w.growthVsLastYear),
+    monthN: sumWeeklyN(sellThroughWeekly),
+  };
+
+  const dohSeries: MetricSeries = {
+    key: "doh",
+    weekly: dohWeekly,
+    monthAvg: avgAcrossWeeks(dohWeekly, (w) => w.value),
+    monthGrowthVsLastMonth: avgAcrossWeeks(dohWeekly, (w) => w.growthVsLastMonth),
+    monthGrowthVsLastYear: avgAcrossWeeks(dohWeekly, (w) => w.growthVsLastYear),
+    monthN: sumWeeklyN(dohWeekly),
+  };
+
+  const metrics: MetricSeries[] = [...directMetrics, sellThroughSeries, dohSeries];
 
   const gmvSeries = metrics.find((m) => m.key === "gmv")!;
 
   // ---- verdict: diff-in-diff so control's own month-on-month movement
-  // isn't credited to the campaign. Every figure is an average per store. ----
+  // isn't credited to the campaign. Every figure is an average weekly value
+  // per store, averaged across the weeks we have data for. ----
   const approvedThisMonth = gmvSeries.monthAvg.approved;
   const controlGrowth = gmvSeries.monthGrowthVsLastMonth.control;
-  const approvedLastWeekRows = sell.filter((r) => r.week === lastWeek && groupOfWeek(r.store_id, lastWeek) === "approved");
-  const approvedLastMonth = aggregate(approvedLastWeekRows.map((r) => r.last_month_gmv).filter((v): v is number => v != null));
+  const approvedLastMonthByWeek = weeks
+    .map((week) => {
+      const rowsThisWeek = sell.filter((r) => r.week === week && groupOfWeek(r.store_id, week) === "approved");
+      return aggregate(rowsThisWeek.map((r) => r.last_month_gmv).filter((v): v is number => v != null));
+    })
+    .filter((v): v is number => v != null);
+  const approvedLastMonth = aggregate(approvedLastMonthByWeek);
   const incrementalValueVsLastMonth =
     approvedThisMonth != null && approvedLastMonth != null && controlGrowth != null
       ? approvedThisMonth - approvedLastMonth * (1 + controlGrowth / 100)
@@ -481,6 +580,14 @@ export async function getContestMonthReport(campaignKey: string, month: string):
     const invRows = invByStore.get(storeId) ?? [];
     const storeAvailVals = invRows.map((r) => r.store_availability).filter((v): v is number => v != null);
 
+    const gmvVals = weekRows.map(([, r]) => r.this_month_gmv).filter((v): v is number => v != null);
+    const stockVals = weekRows.map(([, r]) => r.this_month_in_store_value).filter((v): v is number => v != null);
+    const avgGmvForStore = aggregate(gmvVals);
+    const avgStockForStore = aggregate(stockVals);
+    const sellThroughForStore =
+      avgGmvForStore != null && avgStockForStore != null && avgStockForStore !== 0 ? avgGmvForStore / avgStockForStore : null;
+    const dohForStore = avgGmvForStore != null && avgStockForStore != null && avgGmvForStore !== 0 ? (avgStockForStore / avgGmvForStore) * 7 : null;
+
     const storeStatuses = statusByStore.get(storeId) ?? [];
     // Full week-by-week history, including weeks with no campaign row at all
     // (group "control" that week) — not just the weeks a status happened to exist for.
@@ -501,6 +608,9 @@ export async function getContestMonthReport(campaignKey: string, month: string):
       gmvGrowthVsLastYear: median(lyGrowths),
       hasLastYearData,
       storeAvailability: avgPercent(storeAvailVals),
+      inStoreValue: avgStockForStore,
+      sellThrough: sellThroughForStore,
+      doh: dohForStore,
     };
   });
   stores.sort((a, b) => (b.gmvGrowthVsLastMonth ?? -Infinity) - (a.gmvGrowthVsLastMonth ?? -Infinity));
@@ -511,12 +621,18 @@ export async function getContestMonthReport(campaignKey: string, month: string):
     return counts;
   });
 
-  // ---- stock: approved vs poor only — control carries no Inventory Data.
-  // The sheet already reports availability as a percentage per SKU/store/week,
-  // so every figure here is an average of that percentage, not a ratio of
-  // raw counts. ----
+  // ---- stock: store availability by group (control carries no Inventory
+  // Data), warehouse availability as a single shared figure. The sheet
+  // already reports both as a percentage per SKU/store/week, so every figure
+  // here is an average of that percentage, not a ratio of raw counts. ----
   const byWeek = new Map<number, { approved: number[]; poor: number[] }>();
+  const byWeekWh = new Map<number, number[]>();
   for (const r of inventory) {
+    if (r.wh_availability != null) {
+      const list = byWeekWh.get(r.week) ?? [];
+      list.push(r.wh_availability);
+      byWeekWh.set(r.week, list);
+    }
     const g = groupOfWeek(r.store_id, r.week);
     if (g === "control") continue;
     if (r.store_availability == null) continue;
@@ -528,23 +644,24 @@ export async function getContestMonthReport(campaignKey: string, month: string):
     .sort(([a], [b]) => a - b)
     .map(([week, acc]) => ({
       week,
+      totalStoreAvailability: avgPercent([...acc.approved, ...acc.poor]),
       approvedStoreAvailability: avgPercent(acc.approved),
       poorStoreAvailability: avgPercent(acc.poor),
     }));
+  const weeklyWarehouse: WeeklyWarehousePoint[] = [...byWeekWh.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([week, vals]) => ({ week, whAvailability: avgPercent(vals) }));
 
   const approvedStoreAvail: number[] = [];
   const poorStoreAvail: number[] = [];
-  const approvedWhAvail: number[] = [];
-  const poorWhAvail: number[] = [];
+  const allWhAvail: number[] = [];
   const bySkuAcc = new Map<string, { skuId: string; productName: string; approved: number[]; poor: number[]; wh: number[] }>();
   for (const r of inventory) {
+    if (r.wh_availability != null) allWhAvail.push(r.wh_availability);
     const g = groupOfWeek(r.store_id, r.week);
     if (g === "control") continue;
     if (r.store_availability != null) {
       (g === "approved" ? approvedStoreAvail : poorStoreAvail).push(r.store_availability);
-    }
-    if (r.wh_availability != null) {
-      (g === "approved" ? approvedWhAvail : poorWhAvail).push(r.wh_availability);
     }
     const acc = bySkuAcc.get(r.sku_id) ?? { skuId: r.sku_id, productName: r.product_name, approved: [] as number[], poor: [] as number[], wh: [] as number[] };
     if (r.store_availability != null) acc[g === "approved" ? "approved" : "poor"].push(r.store_availability);
@@ -564,8 +681,13 @@ export async function getContestMonthReport(campaignKey: string, month: string):
 
   const stock = {
     weekly,
-    avgStoreAvailability: { approved: avgPercent(approvedStoreAvail), poor: avgPercent(poorStoreAvail) },
-    avgWhAvailability: { approved: avgPercent(approvedWhAvail), poor: avgPercent(poorWhAvail) },
+    weeklyWarehouse,
+    avgStoreAvailability: {
+      total: avgPercent([...approvedStoreAvail, ...poorStoreAvail]),
+      approved: avgPercent(approvedStoreAvail),
+      poor: avgPercent(poorStoreAvail),
+    },
+    avgWhAvailability: avgPercent(allWhAvail),
     bySku,
   };
 
@@ -577,4 +699,63 @@ export async function getContestMonthReport(campaignKey: string, month: string):
   };
 
   return { verdict, metrics, stores, stock, lastYear, weeklyGroupCounts };
+}
+
+function previousMonthKey(month: string): string {
+  const [y, m] = month.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 2, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+/** Cached AI headline for one campaign + month — reused as long as the
+ * report's numbers haven't changed (data_fingerprint), regenerated the
+ * moment they do, so the report doesn't call OpenAI on every view. Passes
+ * the previous month's headline along for continuity, not to copy from. */
+export async function getOrGenerateContestHeadline(
+  campaignKey: string,
+  campaignLabel: string,
+  month: string,
+  report: ContestMonthReport,
+  opts?: { force?: boolean },
+): Promise<ContestHeadline | { error: string }> {
+  const supabase = await createClient();
+  const monthDate = `${month}-01`;
+  const fingerprint = computeHeadlineFingerprint(campaignLabel, month, report);
+
+  if (!opts?.force) {
+    const { data: cached } = await supabase
+      .from("contest_ai_headlines")
+      .select("headline, summary, data_fingerprint")
+      .eq("campaign_key", campaignKey)
+      .eq("month", monthDate)
+      .maybeSingle();
+    if (cached && (cached as any).data_fingerprint === fingerprint) {
+      return { headline: (cached as any).headline, summary: (cached as any).summary };
+    }
+  }
+
+  const prevMonth = previousMonthKey(month);
+  const { data: prevRow } = await supabase
+    .from("contest_ai_headlines")
+    .select("headline, summary")
+    .eq("campaign_key", campaignKey)
+    .eq("month", `${prevMonth}-01`)
+    .maybeSingle();
+
+  const result = await generateContestHeadline({
+    campaignLabel,
+    month,
+    report,
+    previous: prevRow ? { month: prevMonth, headline: (prevRow as any).headline, summary: (prevRow as any).summary } : null,
+  });
+  if ("error" in result) return result;
+
+  await supabase
+    .from("contest_ai_headlines")
+    .upsert(
+      { campaign_key: campaignKey, month: monthDate, headline: result.headline, summary: result.summary, data_fingerprint: fingerprint },
+      { onConflict: "campaign_key,month" },
+    );
+
+  return result;
 }

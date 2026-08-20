@@ -3,9 +3,13 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/core/db/server";
 import { requireAdmin } from "@/core/auth/session";
-import { buildStoreResolver, normalizeName, getVeroCampaignSyncPreview } from "./queries";
+import { requireAccess } from "@/core/auth/access";
+import { buildStoreResolver, normalizeName, getVeroCampaignSyncPreview, listCampaignOptions, getContestMonthReport, getOrGenerateContestHeadline } from "./queries";
+import type { ContestHeadline } from "./headline";
 import type { VeroCampaignSyncPreview } from "./queries";
 import { clearDummyData } from "./seed";
+import { runContestChatTurn } from "./chat";
+import type { ChatTurn } from "./chat";
 import type {
   CampaignSourceRow,
   CampaignImportPreview,
@@ -296,4 +300,78 @@ export async function applySellSideImport(
   await clearDummyData();
   revalidatePath("/contest-impact");
   return { imported: insertRows.length };
+}
+
+// ==================== Contest chat ====================
+// A campaign-and-month-scoped chatbot, restricted to answering from the
+// underlying Contest Impact data — see chat.ts for the tool definitions and
+// the system prompt that keeps it on-topic. History is per-user: nobody
+// reads anyone else's thread.
+
+export async function getContestChatHistory(campaignKey: string, month: string): Promise<ChatTurn[]> {
+  const access = await requireAccess("contest_impact");
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("contest_chat_messages")
+    .select("role, content")
+    .eq("user_id", access.profile.id)
+    .eq("campaign_key", campaignKey)
+    .eq("month", `${month}-01`)
+    .order("created_at", { ascending: true });
+  return ((data as any[]) ?? []).map((m) => ({ role: m.role, content: m.content }));
+}
+
+export async function sendContestChatMessage(campaignKey: string, month: string, message: string): Promise<{ reply?: string; error?: string }> {
+  const access = await requireAccess("contest_impact");
+  const trimmed = message.trim();
+  if (!trimmed) return { error: "Type a question first." };
+
+  const supabase = await createClient();
+  const monthDate = `${month}-01`;
+
+  const campaigns = await listCampaignOptions();
+  const campaign = campaigns.find((c) => c.key === campaignKey);
+  if (!campaign) return { error: "Unknown campaign." };
+
+  const { data: historyRows } = await supabase
+    .from("contest_chat_messages")
+    .select("role, content")
+    .eq("user_id", access.profile.id)
+    .eq("campaign_key", campaignKey)
+    .eq("month", monthDate)
+    .order("created_at", { ascending: true });
+  const history: ChatTurn[] = ((historyRows as any[]) ?? []).map((m) => ({ role: m.role, content: m.content }));
+
+  const result = await runContestChatTurn({
+    currentCampaignKey: campaign.key,
+    currentCampaignLabel: campaign.label,
+    currentMonth: month,
+    history,
+    userMessage: trimmed,
+  });
+
+  if ("error" in result) return { error: result.error };
+
+  // Best-effort persistence — a logging failure shouldn't hide a good reply.
+  await supabase.from("contest_chat_messages").insert([
+    { user_id: access.profile.id, campaign_key: campaignKey, month: monthDate, role: "user", content: trimmed },
+    { user_id: access.profile.id, campaign_key: campaignKey, month: monthDate, role: "assistant", content: result.reply },
+  ]);
+
+  return { reply: result.reply };
+}
+
+// ==================== AI headline ====================
+
+export async function regenerateContestHeadline(campaignKey: string, month: string): Promise<ContestHeadline | { error: string }> {
+  await requireAccess("contest_impact");
+
+  const campaigns = await listCampaignOptions();
+  const campaign = campaigns.find((c) => c.key === campaignKey);
+  if (!campaign) return { error: "Unknown campaign." };
+
+  const report = await getContestMonthReport(campaignKey, month);
+  const result = await getOrGenerateContestHeadline(campaignKey, campaign.label, month, report, { force: true });
+  revalidatePath("/contest-impact");
+  return result;
 }

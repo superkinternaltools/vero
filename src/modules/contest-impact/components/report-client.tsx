@@ -2,15 +2,19 @@
 
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
+import { Maximize2, MessageCircle, RefreshCw } from "lucide-react";
 import { SelectSearch } from "@/core/ui/select-search";
+import { Modal } from "@/core/ui/modal";
 import { cn } from "@/core/lib/utils";
 import { SELL_METRICS, GROUP_LABELS } from "../types";
+import { ChatPanel } from "./chat-panel";
+import { regenerateContestHeadline } from "../actions";
+import type { ContestHeadline } from "../headline";
 import type {
   CampaignOption,
   ComparisonBasis,
   ContestGroup,
   ContestMonthReport,
-  GroupValues,
   MetricKind,
   MetricSeries,
   StoreRow,
@@ -45,6 +49,8 @@ function fmtPercent(v: number | null): string {
 function fmtHard(v: number | null, kind: MetricKind): string {
   if (kind === "currency") return fmtINR(v);
   if (kind === "percent") return fmtPercent(v);
+  if (kind === "ratio") return v == null ? "—" : `${v.toFixed(2)}x`;
+  if (kind === "days") return v == null ? "—" : `${v.toFixed(1)}d`;
   return fmtNum(v);
 }
 function fmtGrowth(v: number | null, kind: MetricKind): string {
@@ -212,18 +218,138 @@ function WeeklyChart({
   );
 }
 
-// ==================== stock chart ====================
+// ==================== stock charts ====================
 
-function StockWeeklyChart({ weekly }: { weekly: { week: number; approvedStoreAvailability: number | null; poorStoreAvailability: number | null }[] }) {
-  const [hover, setHover] = useState<{ group: "approved" | "poor"; week: number } | null>(null);
+type StockSeries = "total" | "approved" | "poor";
+const STOCK_SERIES_COLOR: Record<StockSeries, string> = {
+  total: "var(--color-foreground)",
+  approved: "var(--color-success)",
+  poor: "var(--color-danger)",
+};
+const STOCK_SERIES_LABEL: Record<StockSeries, string> = { total: "Total", approved: "Approved", poor: "Poor" };
+
+/** Store availability by group, with a clickable legend (click a series to
+ * focus it — the others fade) and hover tooltips showing the exact value. */
+function StoreAvailabilityChart({
+  weekly,
+}: {
+  weekly: { week: number; totalStoreAvailability: number | null; approvedStoreAvailability: number | null; poorStoreAvailability: number | null }[];
+}) {
+  const [hover, setHover] = useState<{ series: StockSeries; week: number } | null>(null);
+  const [focus, setFocus] = useState<StockSeries | null>(null);
   const W = 620, H = 240, PADX = 55, PADY = 24;
   const min = 0;
   const max = 110;
   const xFor = (i: number) => (weekly.length > 1 ? PADX + (i * (W - PADX - 20)) / (weekly.length - 1) : W / 2);
   const yFor = (v: number) => H - PADY - ((v - min) / (max - min)) * (H - PADY * 2);
 
-  const approvedPts = weekly.map((w, i) => ({ x: xFor(i), y: w.approvedStoreAvailability != null ? yFor(w.approvedStoreAvailability) : null, week: w.week, value: w.approvedStoreAvailability }));
-  const poorPts = weekly.map((w, i) => ({ x: xFor(i), y: w.poorStoreAvailability != null ? yFor(w.poorStoreAvailability) : null, week: w.week, value: w.poorStoreAvailability }));
+  const fieldFor: Record<StockSeries, "totalStoreAvailability" | "approvedStoreAvailability" | "poorStoreAvailability"> = {
+    total: "totalStoreAvailability",
+    approved: "approvedStoreAvailability",
+    poor: "poorStoreAvailability",
+  };
+  const ptsFor = (series: StockSeries) =>
+    weekly.map((w, i) => ({ x: xFor(i), y: w[fieldFor[series]] != null ? yFor(w[fieldFor[series]]!) : null, week: w.week, value: w[fieldFor[series]] }));
+  const series: StockSeries[] = ["total", "approved", "poor"];
+  const allPts = Object.fromEntries(series.map((s) => [s, ptsFor(s)])) as Record<StockSeries, ReturnType<typeof ptsFor>>;
+
+  const hoveredValue = hover ? allPts[hover.series].find((p) => p.week === hover.week) : null;
+
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap gap-2">
+        {series.map((s) => (
+          <button
+            key={s}
+            type="button"
+            onClick={() => setFocus((f) => (f === s ? null : s))}
+            className={cn(
+              "flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-all",
+              focus === s ? "border-current bg-card" : focus != null ? "border-transparent text-muted-foreground opacity-50" : "border-transparent bg-input text-muted-foreground",
+            )}
+            style={focus === s ? { color: STOCK_SERIES_COLOR[s] } : undefined}
+          >
+            <span className="h-2 w-2 rounded-full" style={{ background: STOCK_SERIES_COLOR[s] }} />
+            {STOCK_SERIES_LABEL[s]}
+          </button>
+        ))}
+        <span className="ml-auto self-center text-[11px] text-muted-foreground">
+          {focus ? `Focused on ${STOCK_SERIES_LABEL[focus]}` : "Click a series to focus it"}
+        </span>
+      </div>
+
+      <div className="relative">
+        <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full">
+          <line x1={PADX} x2={W - 10} y1={yFor(100)} y2={yFor(100)} stroke="var(--color-warning)" strokeDasharray="5 4" strokeWidth={1.5} />
+          <text x={W - 10} y={yFor(100) - 6} fontSize={10} textAnchor="end" fill="var(--color-warning)">100% target</text>
+          {[0, 50].map((v) => (
+            <g key={v}>
+              <line x1={PADX} x2={W - 10} y1={yFor(v)} y2={yFor(v)} stroke="var(--color-border)" strokeWidth={1} />
+              <text x={PADX - 8} y={yFor(v) + 3} fontSize={10} textAnchor="end" fill="var(--color-muted-foreground)">{v}%</text>
+            </g>
+          ))}
+
+          {series.map((s) => {
+            const pts = allPts[s];
+            const valid = pts.filter((p): p is { x: number; y: number; week: number; value: number | null } => p.y != null);
+            const faded = focus != null && focus !== s;
+            return (
+              <g key={s} style={{ transition: "opacity 0.2s ease", opacity: faded ? 0.18 : 1 }}>
+                {valid.length > 1 && (
+                  <polyline
+                    points={valid.map((p) => `${p.x},${p.y}`).join(" ")}
+                    fill="none"
+                    stroke={STOCK_SERIES_COLOR[s]}
+                    strokeWidth={focus === s ? 3.5 : 2.75}
+                  />
+                )}
+                {valid.map((p) => (
+                  <circle
+                    key={p.week}
+                    cx={p.x}
+                    cy={p.y}
+                    r={hover?.series === s && hover?.week === p.week ? 7 : 5}
+                    fill={STOCK_SERIES_COLOR[s]}
+                    style={{ cursor: "pointer" }}
+                    onMouseEnter={() => setHover({ series: s, week: p.week })}
+                    onMouseLeave={() => setHover(null)}
+                  />
+                ))}
+              </g>
+            );
+          })}
+
+          {weekly.map((w, i) => (
+            <text key={w.week} x={xFor(i)} y={H - 4} fontSize={11} textAnchor="middle" fill="var(--color-muted-foreground)">Week {w.week}</text>
+          ))}
+        </svg>
+        {hover && hoveredValue && (
+          <div
+            className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-md border border-border bg-foreground px-2.5 py-1.5 text-xs font-medium text-background shadow-lg"
+            style={{
+              left: `${(xFor(weekly.findIndex((w) => w.week === hover.week)) / W) * 100}%`,
+              top: `${(yFor(hoveredValue.value ?? 0) / H) * 100 - 2}%`,
+            }}
+          >
+            {STOCK_SERIES_LABEL[hover.series]}: {fmtPercent(hoveredValue.value)}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Warehouse availability — a single shared pool, so one line and no legend. */
+function WarehouseAvailabilityChart({ weekly }: { weekly: { week: number; whAvailability: number | null }[] }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const W = 620, H = 200, PADX = 55, PADY = 24;
+  const min = 0;
+  const max = 110;
+  const xFor = (i: number) => (weekly.length > 1 ? PADX + (i * (W - PADX - 20)) / (weekly.length - 1) : W / 2);
+  const yFor = (v: number) => H - PADY - ((v - min) / (max - min)) * (H - PADY * 2);
+  const pts = weekly.map((w, i) => ({ x: xFor(i), y: w.whAvailability != null ? yFor(w.whAvailability) : null, week: w.week, value: w.whAvailability }));
+  const valid = pts.filter((p): p is { x: number; y: number; week: number; value: number | null } => p.y != null);
+  const hoveredPt = hover != null ? pts.find((p) => p.week === hover) : null;
 
   return (
     <div className="relative">
@@ -236,44 +362,120 @@ function StockWeeklyChart({ weekly }: { weekly: { week: number; approvedStoreAva
             <text x={PADX - 8} y={yFor(v) + 3} fontSize={10} textAnchor="end" fill="var(--color-muted-foreground)">{v}%</text>
           </g>
         ))}
-
-        {([["approved", approvedPts], ["poor", poorPts]] as const).map(([group, pts]) => {
-          const valid = pts.filter((p): p is { x: number; y: number; week: number; value: number | null } => p.y != null);
-          return (
-            <g key={group}>
-              {valid.length > 1 && (
-                <polyline points={valid.map((p) => `${p.x},${p.y}`).join(" ")} fill="none" stroke={GROUP_COLOR[group]} strokeWidth={2.75} />
-              )}
-              {valid.map((p) => (
-                <circle
-                  key={p.week}
-                  cx={p.x}
-                  cy={p.y}
-                  r={hover?.group === group && hover?.week === p.week ? 7 : 5}
-                  fill={GROUP_COLOR[group]}
-                  onMouseEnter={() => setHover({ group, week: p.week })}
-                  onMouseLeave={() => setHover(null)}
-                />
-              ))}
-            </g>
-          );
-        })}
-
+        {valid.length > 1 && (
+          <polyline points={valid.map((p) => `${p.x},${p.y}`).join(" ")} fill="none" stroke="var(--color-foreground)" strokeWidth={2.75} />
+        )}
+        {valid.map((p) => (
+          <circle
+            key={p.week}
+            cx={p.x}
+            cy={p.y}
+            r={hover === p.week ? 7 : 5}
+            fill="var(--color-foreground)"
+            style={{ cursor: "pointer" }}
+            onMouseEnter={() => setHover(p.week)}
+            onMouseLeave={() => setHover(null)}
+          />
+        ))}
         {weekly.map((w, i) => (
           <text key={w.week} x={xFor(i)} y={H - 4} fontSize={11} textAnchor="middle" fill="var(--color-muted-foreground)">Week {w.week}</text>
         ))}
       </svg>
-      {hover && (
+      {hoveredPt && (
         <div
           className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-md border border-border bg-foreground px-2.5 py-1.5 text-xs font-medium text-background shadow-lg"
           style={{
-            left: `${(xFor(weekly.findIndex((w) => w.week === hover.week)) / W) * 100}%`,
-            top: `${(yFor((hover.group === "approved" ? approvedPts : poorPts).find((p) => p.week === hover.week)?.value ?? 0) / H) * 100 - 2}%`,
+            left: `${(xFor(weekly.findIndex((w) => w.week === hover)) / W) * 100}%`,
+            top: `${(yFor(hoveredPt.value ?? 0) / H) * 100 - 2}%`,
           }}
         >
-          {fmtPercent((hover.group === "approved" ? approvedPts : poorPts).find((p) => p.week === hover.week)?.value ?? null)} availability
+          {fmtPercent(hoveredPt.value)} availability
         </div>
       )}
+    </div>
+  );
+}
+
+// ==================== inventory summary (Summary view only) ====================
+
+/** A stat with a thin fill-level bar underneath, so Total/Approved/Poor can
+ * be compared visually, not just by reading three numbers. */
+function StatBar({ label, value, sub, accent }: { label: string; value: number | null; sub?: string; accent: string }) {
+  const pct = value == null ? 0 : Math.min(100, Math.max(0, value));
+  return (
+    <div className="mb-3.5 last:mb-0">
+      <div className="mb-1.5 flex items-baseline justify-between gap-2">
+        <span className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+          <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: accent }} />
+          {label}
+          {sub && <span className="text-[10px] font-normal text-muted-foreground">{sub}</span>}
+        </span>
+        <span className="text-lg font-semibold tabular-nums" style={{ color: accent }}>{fmtPercent(value)}</span>
+      </div>
+      <div className="relative h-1 w-full rounded-full" style={{ background: "var(--color-border)" }}>
+        <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: accent }} />
+        <div className="absolute -top-0.5 -bottom-0.5 w-0.5" style={{ left: "100%", background: "var(--color-warning)" }} />
+      </div>
+    </div>
+  );
+}
+
+/** Shows the chart at its normal compact size, plus an expand button that
+ * opens the same chart (same interactivity — legend focus, hover) larger in
+ * a modal, for when the compact version is too small to read comfortably. */
+function ExpandableChart({ title, children }: { title: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-label={`Enlarge ${title}`}
+        title="Click to enlarge"
+        className="absolute right-0 top-0 z-10 rounded-md border border-border bg-card p-1.5 text-muted-foreground shadow-sm transition-colors hover:border-primary hover:text-primary"
+      >
+        <Maximize2 className="h-3.5 w-3.5" />
+      </button>
+      {children}
+      <Modal open={open} onClose={() => setOpen(false)} title={title} size="xl">
+        {children}
+      </Modal>
+    </div>
+  );
+}
+
+function InventorySummarySection({ report }: { report: ContestMonthReport }) {
+  return (
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+      <div className="rounded-2xl border border-border bg-card p-5">
+        <h3 className="text-sm font-semibold text-foreground">Store inventory</h3>
+        <p className="mb-3 mt-1 text-xs text-muted-foreground">In-store SKU availability against target, month-to-date, by execution group.</p>
+
+        <div className="min-h-36">
+          <StatBar label="Total" sub="all contest stores" value={report.stock.avgStoreAvailability.total} accent={STOCK_SERIES_COLOR.total} />
+          <StatBar label="Approved" sub={`${report.verdict.approvedStoreCount} stores`} value={report.stock.avgStoreAvailability.approved} accent={STOCK_SERIES_COLOR.approved} />
+          <StatBar label="Poor" sub={`${report.verdict.poorStoreCount} stores`} value={report.stock.avgStoreAvailability.poor} accent={STOCK_SERIES_COLOR.poor} />
+        </div>
+
+        <h4 className="mb-1 mt-4 text-xs font-semibold text-foreground">Week-on-week</h4>
+        <ExpandableChart title="Store availability, week on week">
+          <StoreAvailabilityChart weekly={report.stock.weekly} />
+        </ExpandableChart>
+      </div>
+
+      <div className="rounded-2xl border border-border bg-card p-5">
+        <h3 className="text-sm font-semibold text-foreground">Warehouse inventory</h3>
+        <p className="mb-3 mt-1 text-xs text-muted-foreground">Warehouse SKU availability against target, month-to-date, across all SKUs in this campaign.</p>
+
+        <div className="min-h-36">
+          <StatBar label="Total" sub="all SKUs" value={report.stock.avgWhAvailability} accent={STOCK_SERIES_COLOR.total} />
+        </div>
+
+        <h4 className="mb-1 mt-4 text-xs font-semibold text-foreground">Week-on-week</h4>
+        <ExpandableChart title="Warehouse availability, week on week">
+          <WarehouseAvailabilityChart weekly={report.stock.weeklyWarehouse} />
+        </ExpandableChart>
+      </div>
     </div>
   );
 }
@@ -283,99 +485,72 @@ function StockWeeklyChart({ weekly }: { weekly: { week: number; approvedStoreAva
 type View = "summary" | "metrics" | "stores" | "execution";
 const VIEW_LABELS: Record<View, string> = { summary: "Summary", metrics: "Detailed metrics", stores: "Store performance", execution: "Execution analysis" };
 
-function groupValue<T>(gv: GroupValues<T>, g: ContestGroup): T {
-  return gv[g];
-}
-
-function SummaryView({ report, basis, onNavigate }: { report: ContestMonthReport; basis: ComparisonBasis; onNavigate: (v: View) => void }) {
+function SummaryView({
+  report,
+  basis,
+  onNavigate,
+  onOpenChat,
+  headline,
+  onRegenerateHeadline,
+  regeneratingHeadline,
+}: {
+  report: ContestMonthReport;
+  basis: ComparisonBasis;
+  onNavigate: (v: View) => void;
+  onOpenChat: () => void;
+  headline: ContestHeadline | { error: string } | null;
+  onRegenerateHeadline: () => void;
+  regeneratingHeadline: boolean;
+}) {
   const { verdict } = report;
   const gmv = report.metrics.find((m) => m.key === "gmv")!;
 
-  const groups: ContestGroup[] = ["approved", "poor", "control"];
-  const counts: Record<ContestGroup, number> = {
-    approved: verdict.approvedStoreCount,
-    poor: verdict.poorStoreCount,
-    control: verdict.controlStoreCount,
-  };
-  const defn: Record<ContestGroup, string> = {
-    approved: "Campaign ran · classified as approved as of the latest week",
-    poor: "Campaign ran · not classified as approved as of the latest week",
-    control: "No Campaign Data row as of the latest week",
-  };
-
   const incrementalPositive = (verdict.incrementalValueVsLastMonth ?? 0) >= 0;
+
+  const headlineText = headline && "headline" in headline ? headline.headline : null;
+  const summaryText = headline && "summary" in headline ? headline.summary : null;
+  const headlineError = headline && "error" in headline ? headline.error : null;
 
   return (
     <div className="space-y-4">
       <div className={cn("rounded-2xl border border-border bg-card p-6 border-l-[3px]", incrementalPositive ? "border-l-success" : "border-l-danger")}>
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Headline finding · {fmtMonthLabel(basis)}</span>
-        <p className="mt-2 text-xl font-semibold tracking-tight text-foreground">
-          The average approved-display store sold{" "}
-          <span className={pctColor(verdict.incrementalValueVsLastMonth)}>{fmtINR(verdict.incrementalValueVsLastMonth)} more</span> than it would
-          have at the control group&apos;s pace.
-        </p>
-        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          That&apos;s on top of an average {fmtINR(verdict.approvedGmvThisMonth)} per store already, across {verdict.approvedStoreCount} approved
-          stores. The average poor-execution store ({verdict.poorStoreCount} stores) grew {fmtGrowth(verdict.poorGrowthVsLastMonth, "currency")} — {" "}
-          {verdict.poorGrowthVsLastMonth != null && verdict.controlGrowthVsLastMonth != null && Math.abs(verdict.poorGrowthVsLastMonth - verdict.controlGrowthVsLastMonth) < 5
-            ? "close to the control group's own pace, suggesting the display alone didn't move sales without approval."
-            : "see Execution analysis for what separated them."}
-        </p>
-      </div>
-
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        {groups.map((g) => (
-          <button
-            key={g}
-            type="button"
-            onClick={() => onNavigate("stores")}
-            className="rounded-2xl border border-t-[3px] border-border bg-card p-4 text-left transition-colors hover:border-primary"
-            style={{ borderTopColor: GROUP_COLOR[g] }}
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-semibold text-foreground">{GROUP_LABELS[g]}</span>
-              <span className="text-[11px] text-muted-foreground">{counts[g]} stores (latest wk)</span>
-            </div>
-            <p className="mt-1 text-[11px] text-muted-foreground">{defn[g]}</p>
-            <div className="group/val relative mt-3 inline-block cursor-pointer">
-              <span className="text-2xl font-semibold tabular-nums text-foreground">{fmtINR(groupValue(gmv.monthAvg, g))}</span>
-              <div className="pointer-events-none absolute bottom-full left-0 z-10 mb-1.5 hidden whitespace-nowrap rounded-md bg-foreground px-2 py-1 text-[11px] font-medium text-background group-hover/val:block">
-                {fmtGrowth(basis === "lastMonth" ? gmv.monthGrowthVsLastMonth[g] : gmv.monthGrowthVsLastYear[g], "currency")} {fmtMonthLabel(basis)}
-              </div>
-            </div>
-            <p className="text-[11px] text-muted-foreground">avg GMV per store this month</p>
-          </button>
-        ))}
-      </div>
-
-      <div className="rounded-2xl border border-border bg-card p-5">
-        <h3 className="text-sm font-semibold text-foreground">Store counts by week</h3>
-        <p className="mb-3 mt-1 text-xs text-muted-foreground">
-          A store&apos;s group can change week to week (approved one week, rejected the next) — so this is shown per week rather than one count for the month.
-        </p>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
-                <th className="px-3 py-2 text-left font-semibold">Group</th>
-                {report.weeklyGroupCounts.map((w) => (
-                  <th key={w.week} className="px-3 py-2 text-right font-semibold">Week {w.week}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {groups.map((g) => (
-                <tr key={g} className="border-b border-border last:border-0">
-                  <td className="px-3 py-2 font-medium" style={{ color: GROUP_COLOR[g] }}>{GROUP_LABELS[g]}</td>
-                  {report.weeklyGroupCounts.map((w) => (
-                    <td key={w.week} className="px-3 py-2 text-right tabular-nums text-foreground">{w[g]}</td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Headline finding · AI-generated</span>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={onRegenerateHeadline}
+              disabled={regeneratingHeadline}
+              className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary hover:text-primary disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", regeneratingHeadline && "animate-spin")} />
+              Regenerate
+            </button>
+            <button
+              type="button"
+              onClick={onOpenChat}
+              className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary hover:text-primary"
+            >
+              <MessageCircle className="h-3.5 w-3.5" />
+              Chat with Vero
+            </button>
+          </div>
         </div>
+        {headlineText && summaryText ? (
+          <>
+            <p className="mt-2 text-xl font-semibold tracking-tight text-foreground">{headlineText}</p>
+            <p className="mt-2 text-sm text-muted-foreground">{summaryText}</p>
+          </>
+        ) : (
+          <p className="mt-2 text-sm text-muted-foreground">
+            {headlineError ? `${headlineError} Try regenerating.` : regeneratingHeadline ? "Writing this month's headline…" : "No headline yet — try regenerating."}
+          </p>
+        )}
       </div>
+
+      <InventorySummarySection report={report} />
+
+      <ExecutionGroupsCard report={report} basis={basis} onNavigate={onNavigate} />
 
       <div className="rounded-2xl border border-border bg-card p-5">
         <h3 className="text-sm font-semibold text-foreground">Sales (GMV), week by week</h3>
@@ -385,6 +560,111 @@ function SummaryView({ report, basis, onNavigate }: { report: ContestMonthReport
           <WeeklyChart metric={gmv} basis={basis} />
         </div>
       </div>
+    </div>
+  );
+}
+
+/** One row per group — name, GMV, sell-through, and the current store count
+ * — plus a single week-by-week strip for how the approved/poor pool
+ * reshuffles. Sell-through (not a raw stock rupee figure) is the number that
+ * actually says who's converting better, and the weekly counts live in
+ * exactly one place instead of two. */
+function ExecutionGroupsCard({
+  report,
+  basis,
+  onNavigate,
+}: {
+  report: ContestMonthReport;
+  basis: ComparisonBasis;
+  onNavigate: (v: View) => void;
+}) {
+  const gmv = report.metrics.find((m) => m.key === "gmv")!;
+  const sellThrough = report.metrics.find((m) => m.key === "sellThrough");
+  const doh = report.metrics.find((m) => m.key === "doh");
+  const groups: ContestGroup[] = ["approved", "poor", "control"];
+
+  const lastWeek = report.weeklyGroupCounts[report.weeklyGroupCounts.length - 1];
+  const splitRows = report.weeklyGroupCounts.map((w) => ({ week: w.week, approved: w.approved, poor: w.poor, total: w.approved + w.poor }));
+  const showSplit = splitRows.some((r) => r.total > 0);
+
+  return (
+    <div className="rounded-2xl border border-border bg-card p-5">
+      <h3 className="text-sm font-semibold text-foreground">Execution groups</h3>
+      <p className="mb-3 mt-1 text-xs text-muted-foreground">
+        Approved — campaign ran, approved. Poor — campaign ran, not approved. Control — no campaign data at all.
+      </p>
+      <div className="divide-y divide-border">
+        {groups.map((g) => {
+          const growth = basis === "lastMonth" ? gmv.monthGrowthVsLastMonth[g] : gmv.monthGrowthVsLastYear[g];
+          const weekCounts = report.weeklyGroupCounts.map((w) => w[g]);
+          const allSame = weekCounts.length > 0 && weekCounts.every((c) => c === weekCounts[0]);
+          const st = sellThrough?.monthAvg[g] ?? null;
+          const dohVal = doh?.monthAvg[g] ?? null;
+          return (
+            <button
+              key={g}
+              type="button"
+              onClick={() => onNavigate("stores")}
+              className="grid w-full grid-cols-1 items-center gap-2 py-3.5 text-left first:pt-3 last:pb-0 sm:grid-cols-[1.3fr_1fr_0.9fr_0.7fr] sm:gap-4"
+            >
+              <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+                <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: GROUP_COLOR[g] }} />
+                {GROUP_LABELS[g]}
+              </div>
+              <div>
+                <span className="text-lg font-semibold tabular-nums" style={{ color: GROUP_COLOR[g] }}>
+                  {fmtINR(gmv.monthAvg[g])}
+                </span>
+                <p className="text-[11px] text-muted-foreground">GMV · {fmtGrowth(growth, "currency")} {fmtMonthLabel(basis)}</p>
+              </div>
+              <div>
+                <span className="text-lg font-semibold tabular-nums text-foreground">{st != null ? `${st.toFixed(2)}x` : "—"}</span>
+                <p className="text-[11px] text-muted-foreground">
+                  sell-through{dohVal != null && ` · ${dohVal.toFixed(0)}d on hand`}
+                </p>
+              </div>
+              <div className="sm:text-right">
+                <span className="text-lg font-semibold tabular-nums text-foreground">{lastWeek ? lastWeek[g] : (weekCounts[0] ?? 0)}</span>
+                <p className="text-[11px] text-muted-foreground">{allSame ? "stores" : `stores, latest wk ${lastWeek?.week ?? ""}`}</p>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {showSplit && (
+        <div className="mt-4 border-t border-border pt-4">
+          <h4 className="text-xs font-semibold text-foreground">Approved ⇄ poor, week by week</h4>
+          <p className="mb-3 mt-0.5 text-[11px] text-muted-foreground">
+            The same pool of contest stores reshuffles as verdicts change — control isn&apos;t part of this pool.
+          </p>
+          <div className="space-y-1.5">
+            {splitRows.map((r) => (
+              <div key={r.week} className="flex items-center gap-3">
+                <span className="w-10 shrink-0 text-[11px] text-muted-foreground">Wk {r.week}</span>
+                <div className="flex h-5 flex-1 overflow-hidden rounded-md bg-input">
+                  {r.total > 0 && (
+                    <>
+                      <div
+                        className="flex items-center justify-center text-[10px] font-medium text-background"
+                        style={{ width: `${(r.approved / r.total) * 100}%`, background: GROUP_COLOR.approved }}
+                      >
+                        {r.approved > 0 ? r.approved : ""}
+                      </div>
+                      <div
+                        className="flex items-center justify-center text-[10px] font-medium text-background"
+                        style={{ width: `${(r.poor / r.total) * 100}%`, background: GROUP_COLOR.poor }}
+                      >
+                        {r.poor > 0 ? r.poor : ""}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -420,7 +700,7 @@ function FullDataTable({ report, basis }: { report: ContestMonthReport; basis: C
     <div className="overflow-x-auto rounded-2xl border border-border bg-card">
       <div className="p-5 pb-2">
         <h3 className="text-sm font-semibold text-foreground">Full data table</h3>
-        <p className="mt-1 text-xs text-muted-foreground">Average per store this month, and change {fmtMonthLabel(basis)}, per metric and group.</p>
+        <p className="mt-1 text-xs text-muted-foreground">Average per store per week, and change {fmtMonthLabel(basis)}, per metric and group.</p>
       </div>
       <table className="w-full text-sm">
         <thead>
@@ -463,6 +743,105 @@ function FullDataTable({ report, basis }: { report: ContestMonthReport; basis: C
   );
 }
 
+type MoveDiagnosis = {
+  group: ContestGroup;
+  week: number;
+  gmvChangePct: number;
+  stockChangePct: number | null;
+  kind: "supply" | "demand" | "mixed";
+};
+
+function pctChange(curr: number | null, prev: number | null): number | null {
+  if (curr == null || prev == null || prev === 0) return null;
+  return ((curr - prev) / Math.abs(prev)) * 100;
+}
+
+/** Compares each week's GMV move to that same week's in-store-value move, for
+ * approved and poor stores — a GMV drop that tracks a stock drop is a supply
+ * story, not an execution one; a GMV drop with flat stock is the opposite. */
+function diagnoseWeeklyMoves(report: ContestMonthReport): MoveDiagnosis[] {
+  const gmv = report.metrics.find((m) => m.key === "gmv");
+  const stock = report.metrics.find((m) => m.key === "inStoreValue");
+  if (!gmv || !stock) return [];
+
+  const out: MoveDiagnosis[] = [];
+  for (const g of ["approved", "poor"] as ContestGroup[]) {
+    for (let i = 1; i < gmv.weekly.length; i++) {
+      const prevWeek = gmv.weekly[i - 1];
+      const currWeek = gmv.weekly[i];
+      const gmvChangePct = pctChange(currWeek.value[g], prevWeek.value[g]);
+      if (gmvChangePct == null || Math.abs(gmvChangePct) < 8) continue;
+
+      const stockPrev = stock.weekly.find((w) => w.week === prevWeek.week);
+      const stockCurr = stock.weekly.find((w) => w.week === currWeek.week);
+      const stockChangePct = pctChange(stockCurr?.value[g] ?? null, stockPrev?.value[g] ?? null);
+
+      let kind: MoveDiagnosis["kind"] = "mixed";
+      if (stockChangePct != null) {
+        const sameDirection = Math.sign(stockChangePct) === Math.sign(gmvChangePct);
+        const stockMoved = Math.abs(stockChangePct) >= 8;
+        if (sameDirection && stockMoved) kind = "supply";
+        else if (!stockMoved) kind = "demand";
+      }
+      out.push({ group: g, week: currWeek.week, gmvChangePct, stockChangePct, kind });
+    }
+  }
+  return out.sort((a, b) => Math.abs(b.gmvChangePct) - Math.abs(a.gmvChangePct));
+}
+
+const DIAGNOSIS_COLOR: Record<MoveDiagnosis["kind"], string> = {
+  supply: "var(--color-warning)",
+  demand: "var(--color-danger)",
+  mixed: "var(--color-muted-foreground)",
+};
+const DIAGNOSIS_LABEL: Record<MoveDiagnosis["kind"], string> = {
+  supply: "Supply-driven",
+  demand: "Execution/demand-driven",
+  mixed: "Mixed signal",
+};
+
+function WeeklyMoveDiagnosis({ report }: { report: ContestMonthReport }) {
+  const moves = diagnoseWeeklyMoves(report);
+  if (!moves.length) return null;
+
+  return (
+    <div className="rounded-2xl border border-border bg-card p-5">
+      <h3 className="text-sm font-semibold text-foreground">Why GMV moved</h3>
+      <p className="mb-4 mt-1 text-xs text-muted-foreground">
+        Every week-on-week GMV swing of 8% or more, checked against that same week&apos;s in-store value — stock moving with GMV points to a supply
+        cause, GMV moving while stock held points to execution or demand.
+      </p>
+      <div className="space-y-2.5">
+        {moves.map((mv, i) => (
+          <div
+            key={i}
+            className="flex items-start gap-3 rounded-xl border-l-[3px] bg-input p-3"
+            style={{ borderLeftColor: DIAGNOSIS_COLOR[mv.kind] }}
+          >
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold" style={{ color: DIAGNOSIS_COLOR[mv.kind] }}>
+                Week {mv.week} · {GROUP_LABELS[mv.group]} · {DIAGNOSIS_LABEL[mv.kind]}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                GMV {mv.gmvChangePct >= 0 ? "rose" : "fell"} <span className="font-medium text-foreground">{fmtGrowth(mv.gmvChangePct, "number")}</span>{" "}
+                vs the prior week, while in-store value{" "}
+                {mv.stockChangePct == null ? (
+                  "had no comparable data"
+                ) : (
+                  <>
+                    {mv.stockChangePct >= 0 ? "rose" : "fell"} <span className="font-medium text-foreground">{fmtGrowth(mv.stockChangePct, "number")}</span>
+                  </>
+                )}
+                .
+              </p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function MetricsView({ report, basis }: { report: ContestMonthReport; basis: ComparisonBasis }) {
   return (
     <div className="space-y-4">
@@ -481,7 +860,7 @@ function MetricsView({ report, basis }: { report: ContestMonthReport; basis: Com
                     <span style={{ color: GROUP_COLOR[g] }} className="font-medium">
                       {fmtHard(m.monthAvg[g], meta.kind)}
                     </span>{" "}
-                    avg
+                    avg/wk
                   </span>
                 ))}
               </div>
@@ -492,37 +871,9 @@ function MetricsView({ report, basis }: { report: ContestMonthReport; basis: Com
         );
       })}
 
-      <div className="rounded-2xl border border-border bg-card p-5">
-        <h3 className="text-sm font-semibold text-foreground">Stock &amp; inventory status</h3>
-        <p className="mb-4 mt-1 text-xs text-muted-foreground">
-          Store and warehouse availability by week, as reported directly on the sheet. Control carries no inventory data.
-        </p>
-
-        <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <StatBox label="Approved avg store availability" value={fmtPercent(report.stock.avgStoreAvailability.approved)} />
-          <StatBox label="Poor avg store availability" value={fmtPercent(report.stock.avgStoreAvailability.poor)} warn />
-          <StatBox label="Approved avg WH availability" value={fmtPercent(report.stock.avgWhAvailability.approved)} />
-          <StatBox label="Poor avg WH availability" value={fmtPercent(report.stock.avgWhAvailability.poor)} warn />
-        </div>
-
-        <div className="mb-3 flex gap-4 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm" style={{ background: GROUP_COLOR.approved }} />Approved</span>
-          <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm" style={{ background: GROUP_COLOR.poor }} />Poor execution</span>
-        </div>
-        <StockWeeklyChart weekly={report.stock.weekly} />
-      </div>
+      <WeeklyMoveDiagnosis report={report} />
 
       <FullDataTable report={report} basis={basis} />
-    </div>
-  );
-}
-
-function StatBox({ label, value, warn, sub }: { label: string; value: string; warn?: boolean; sub?: string }) {
-  return (
-    <div className="rounded-xl bg-input p-3">
-      <p className="text-[11px] text-muted-foreground">{label}</p>
-      <p className={cn("text-lg font-semibold tabular-nums", warn ? "text-danger" : "text-foreground")}>{value}</p>
-      {sub && <p className="mt-0.5 text-[10px] text-muted-foreground">{sub}</p>}
     </div>
   );
 }
@@ -542,6 +893,7 @@ function StoresView({ report, basis }: { report: ContestMonthReport; basis: Comp
         <h3 className="text-sm font-semibold text-foreground">Store performance</h3>
         <p className="mt-1 text-xs text-muted-foreground">
           Every store, ranked by GMV growth {fmtMonthLabel(basis)}. Group is shown per week — it can change month to month, and even week to week.
+          Sell-through (GMV ÷ stock on shelf) is the fairer read when comparing stores carrying very different stock levels.
         </p>
         <div className="mt-3"><GroupLegend /></div>
       </div>
@@ -574,9 +926,20 @@ function StoresView({ report, basis }: { report: ContestMonthReport; basis: Comp
                 {growth == null ? "no data" : fmtGrowth(growth, "currency")}
               </div>
               {s.group !== "control" && (
-                <div className="min-w-[80px] text-right text-xs text-muted-foreground">
-                  {fmtPercent(s.storeAvailability)} avail.
-                </div>
+                <>
+                  <div className="min-w-[80px] text-right text-xs text-muted-foreground">
+                    {fmtPercent(s.storeAvailability)} avail.
+                  </div>
+                  <div className="min-w-[80px] text-right text-xs text-muted-foreground">
+                    {fmtINR(s.inStoreValue)} stock
+                  </div>
+                  <div className="min-w-[70px] text-right text-xs font-medium text-foreground">
+                    {s.sellThrough == null ? "—" : `${s.sellThrough.toFixed(2)}x`} sell-thru
+                  </div>
+                  <div className="min-w-[70px] text-right text-xs text-muted-foreground">
+                    {s.doh == null ? "—" : `${s.doh.toFixed(1)}d`} on hand
+                  </div>
+                </>
               )}
             </div>
           );
@@ -675,6 +1038,64 @@ function ExecutionView({ report, basis }: { report: ContestMonthReport; basis: C
           })}
         </svg>
       </div>
+
+      <StockVsGmvScatter stores={report.stores} />
+    </div>
+  );
+}
+
+/** Plots stock on shelf against GMV, per store — makes the capacity ceiling
+ * visible directly: a store far left simply didn't have enough stock to post
+ * a high GMV, regardless of how well it executed. A reference line at the
+ * overall median sell-through shows who's converting above or below par. */
+function StockVsGmvScatter({ stores }: { stores: StoreRow[] }) {
+  const points = stores.filter((s) => s.group !== "control" && s.inStoreValue != null && s.gmv != null);
+  if (points.length < 2) return null;
+
+  const sellThroughs = points.map((s) => s.sellThrough).filter((v): v is number => v != null).sort((a, b) => a - b);
+  const medianSellThrough = sellThroughs.length ? sellThroughs[Math.floor(sellThroughs.length / 2)] : null;
+
+  const xVals = points.map((s) => s.inStoreValue!);
+  const yVals = points.map((s) => s.gmv!);
+  const xMax = Math.max(1, ...xVals) * 1.08;
+  const yMax = Math.max(1, ...yVals) * 1.08;
+
+  const W = 600, H = 280, PADX = 60, PADY = 20;
+  const xFor = (v: number) => PADX + (v / xMax) * (W - PADX - 20);
+  const yFor = (v: number) => H - PADY - (v / yMax) * (H - PADY * 2);
+
+  const lineEndX = medianSellThrough != null && medianSellThrough > 0 ? Math.min(xMax, yMax / medianSellThrough) : 0;
+
+  return (
+    <div className="rounded-2xl border border-border bg-card p-5">
+      <h3 className="text-sm font-semibold text-foreground">Stock on shelf vs GMV</h3>
+      <p className="mb-4 mt-1 text-xs text-muted-foreground">
+        Each dot is one store. The dashed line is the group&apos;s median sell-through — above it converts better than typical, below it converts
+        worse; far left means low GMV is a stock ceiling, not necessarily poor execution.
+      </p>
+      <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full">
+        <line x1={PADX} x2={W - 10} y1={H - PADY} y2={H - PADY} stroke="var(--color-border)" strokeWidth={1} />
+        <line x1={PADX} x2={PADX} y1={10} y2={H - PADY} stroke="var(--color-border)" strokeWidth={1} />
+        {medianSellThrough != null && (
+          <line x1={xFor(0)} y1={yFor(0)} x2={xFor(lineEndX)} y2={yFor(lineEndX * medianSellThrough)} stroke="var(--color-warning)" strokeDasharray="6 4" strokeWidth={1.5} />
+        )}
+        <text x={PADX - 8} y={16} fontSize={10} textAnchor="end" fill="var(--color-muted-foreground)">{fmtINR(yMax)}</text>
+        <text x={PADX - 8} y={H - PADY} fontSize={10} textAnchor="end" fill="var(--color-muted-foreground)">₹0</text>
+        <text x={PADX} y={H - 4} fontSize={10} fill="var(--color-muted-foreground)">₹0 stock</text>
+        <text x={W - 10} y={H - 4} fontSize={10} textAnchor="end" fill="var(--color-muted-foreground)">{fmtINR(xMax)} stock</text>
+        {points.map((s) => (
+          <circle
+            key={s.storeId}
+            cx={xFor(s.inStoreValue!)}
+            cy={yFor(s.gmv!)}
+            r={5}
+            fill={GROUP_COLOR[s.group]}
+            opacity={0.8}
+          >
+            <title>{`${s.storeName}: ${fmtINR(s.inStoreValue)} stock, ${fmtINR(s.gmv)} GMV, ${s.sellThrough == null ? "no sell-through data" : `${s.sellThrough.toFixed(2)}x sell-through`}`}</title>
+          </circle>
+        ))}
+      </svg>
     </div>
   );
 }
@@ -687,17 +1108,38 @@ export function ReportClient({
   campaignKey,
   month,
   report,
+  headline,
 }: {
   campaigns: CampaignOption[];
   months: string[];
   campaignKey: string | null;
   month: string | null;
   report: ContestMonthReport | null;
+  headline: ContestHeadline | { error: string } | null;
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
   const [view, setView] = useState<View>("summary");
   const [basis, setBasis] = useState<ComparisonBasis>("lastMonth");
+  const [chatOpen, setChatOpen] = useState(false);
+  // A regenerated headline overrides the server-provided one only for the
+  // campaign/month it was generated for — keyed rather than mirrored via an
+  // effect, so switching campaign or month falls straight back to the
+  // server value instead of showing a stale override.
+  const [headlineOverride, setHeadlineOverride] = useState<{ key: string; result: ContestHeadline | { error: string } } | null>(null);
+  const [regeneratingHeadline, setRegeneratingHeadline] = useState(false);
+  const headlineKey = `${campaignKey ?? ""}:${month ?? ""}`;
+  const headlineState = headlineOverride && headlineOverride.key === headlineKey ? headlineOverride.result : headline;
+
+  function handleRegenerateHeadline() {
+    if (!campaignKey || !month) return;
+    setRegeneratingHeadline(true);
+    startTransition(async () => {
+      const result = await regenerateContestHeadline(campaignKey, month);
+      setHeadlineOverride({ key: headlineKey, result });
+      setRegeneratingHeadline(false);
+    });
+  }
 
   function navigate(next: { campaign?: string | null; month?: string | null }) {
     const params = new URLSearchParams();
@@ -767,11 +1209,31 @@ export function ReportClient({
           </div>
 
           <div className="mt-4">
-            {view === "summary" && <SummaryView report={report} basis={basis} onNavigate={setView} />}
+            {view === "summary" && (
+              <SummaryView
+                report={report}
+                basis={basis}
+                onNavigate={setView}
+                onOpenChat={() => setChatOpen(true)}
+                headline={headlineState}
+                onRegenerateHeadline={handleRegenerateHeadline}
+                regeneratingHeadline={regeneratingHeadline}
+              />
+            )}
             {view === "metrics" && <MetricsView report={report} basis={basis} />}
             {view === "stores" && <StoresView report={report} basis={basis} />}
             {view === "execution" && <ExecutionView report={report} basis={basis} />}
           </div>
+
+          {campaignKey && month && (
+            <ChatPanel
+              open={chatOpen}
+              onClose={() => setChatOpen(false)}
+              campaignKey={campaignKey}
+              campaignLabel={campaigns.find((c) => c.key === campaignKey)?.label ?? campaignKey}
+              month={month}
+            />
+          )}
         </>
       )}
     </div>
