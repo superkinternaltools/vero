@@ -9,6 +9,30 @@ import { computeCycles } from "./generate";
 import { scoreSubmission } from "@/modules/ai-review/score";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+
+/** Cycle generation only ever upserts — editing a campaign's schedule (e.g.
+ * pushing end_date from the 28th to the 31st) changes computeCycles()'s
+ * output, but the old due-date's task was never removed, so both live on as
+ * separate "pending" tasks forever. This deletes exactly the tasks that are
+ * stale under the freshly computed cycle set for this campaign — scoped to
+ * status "pending" only, so a task that was ever submitted/approved/rejected,
+ * marked not_done, or missed is never touched. */
+async function pruneStaleGeneratedTasks(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  campaignId: string,
+  storeIds: string[],
+  validDueDates: string[],
+): Promise<void> {
+  if (!storeIds.length || !validDueDates.length) return;
+  await supabase
+    .from("tasks")
+    .delete()
+    .eq("campaign_id", campaignId)
+    .in("store_id", storeIds)
+    .eq("status", "pending")
+    .not("due_date", "in", `(${validDueDates.join(",")})`);
+}
+
 export async function generateTasks(): Promise<{ count: number; error?: string }> {
   const me = await getCurrentProfile();
   if (!me?.is_admin) return { count: 0, error: "Not authorized." };
@@ -42,6 +66,7 @@ export async function generateTasks(): Promise<{ count: number; error?: string }
           cycle_end: cyc.end,
           due_date: cyc.due,
         });
+    await pruneStaleGeneratedTasks(supabase, c.id, storeIds, cycles.map((cyc) => cyc.due));
   }
 
   if (rows.length === 0) return { count: 0 };
@@ -258,6 +283,7 @@ export async function autoGenerateTasks(campaignId: string): Promise<void> {
       due_date: cyc.due,
     })),
   );
+  await pruneStaleGeneratedTasks(supabase, campaignId, storeIds, cycles.map((cyc) => cyc.due));
   if (rows.length === 0) return;
   await supabase
     .from("tasks")
