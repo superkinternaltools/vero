@@ -252,3 +252,66 @@ export type UnclassifiedStatusesResult = {
 };
 
 export type CampaignOption = { key: string; label: string };
+
+// ---- "Is it working?" diagnosis ----
+
+/** Seven mutually-exclusive read on the month, decided by a fixed rule tree
+ * in diagnosis.ts — never by the AI. "working"/"working_caveat" both mean the
+ * approved-vs-control lift holds up; the "not_working_*" variants each point
+ * at a different root cause and a different fix. */
+export type DiagnosisVerdict =
+  | "working"
+  | "working_caveat"
+  | "not_working_supply_store"
+  | "not_working_supply_warehouse"
+  | "not_working_rubric"
+  | "not_working_demand"
+  | "inconclusive";
+
+/** Whether the signal behind the verdict got stronger or weaker across the
+ * month — a flat "working"/"not working" hides whether it's improving. Null
+ * when there isn't enough week-to-week data to say. */
+export type DiagnosisTrend = "improving" | "stable" | "fading" | null;
+
+/** Shared between the AI prompt and the UI badge, so the two never drift
+ * apart into different wording for the same verdict. */
+export const DIAGNOSIS_VERDICT_LABELS: Record<DiagnosisVerdict, string> = {
+  working: "Working",
+  working_caveat: "Working, with a caveat",
+  not_working_supply_store: "Not working — store stock shortfall",
+  not_working_supply_warehouse: "Not working — warehouse stock shortfall",
+  not_working_rubric: "Not working — approval isn't discriminating",
+  not_working_demand: "Not working — display isn't moving sales",
+  inconclusive: "Inconclusive — too little data",
+};
+
+export type ContestDiagnosis = {
+  verdict: DiagnosisVerdict;
+  trend: DiagnosisTrend;
+  /** True when fewer than half of approved stores have last-year data —
+   * surfaced as a caveat rather than silently trusted, since it's also
+   * exactly when a pre-existing (not campaign-caused) gap between approved
+   * and control stores would be hardest to rule out. */
+  selectionBiasCaveat: boolean;
+  /** The specific numbers that drove the verdict — handed to the AI so it
+   * narrates this exact evidence rather than inventing its own. */
+  evidence: {
+    incrementalValueVsLastMonth: number | null;
+    incrementalPctOfBaseline: number | null;
+    approvedSellThrough: number | null;
+    poorSellThrough: number | null;
+    approvedVsPoorSellThroughPct: number | null;
+    approvedStoreAvailability: number | null;
+    warehouseAvailability: number | null;
+    approvedStoreCount: number;
+  };
+};
+
+/** The AI's narrative for a diagnosis — never decides verdict/trend itself,
+ * only explains the one the diagnosis engine already picked. rootCause is
+ * empty for "working"/"working_caveat" verdicts. */
+export type ContestReportNarrative = {
+  verdictSentence: string;
+  mechanism: string;
+  rootCause: string;
+};

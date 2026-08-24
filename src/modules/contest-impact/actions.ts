@@ -4,9 +4,17 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/core/db/server";
 import { requireAdmin } from "@/core/auth/session";
 import { requireAccess } from "@/core/auth/access";
-import { buildStoreResolver, normalizeName, getVeroCampaignSyncPreview, listCampaignOptions, getContestMonthReport, getOrGenerateContestHeadline } from "./queries";
+import {
+  buildStoreResolver,
+  normalizeName,
+  getVeroCampaignSyncPreview,
+  listCampaignOptions,
+  getContestMonthReport,
+  getOrGenerateContestHeadline,
+  getOrGenerateContestReport,
+} from "./queries";
 import type { ContestHeadline } from "./headline";
-import type { VeroCampaignSyncPreview } from "./queries";
+import type { VeroCampaignSyncPreview, ContestReport } from "./queries";
 import { clearDummyData } from "./seed";
 import { runContestChatTurn } from "./chat";
 import type { ChatTurn } from "./chat";
@@ -372,6 +380,21 @@ export async function regenerateContestHeadline(campaignKey: string, month: stri
 
   const report = await getContestMonthReport(campaignKey, month);
   const result = await getOrGenerateContestHeadline(campaignKey, campaign.label, month, report, { force: true });
+  revalidatePath("/contest-impact");
+  return result;
+}
+
+// ==================== "Is it working?" report ====================
+
+export async function regenerateContestReport(campaignKey: string, month: string): Promise<ContestReport | { error: string }> {
+  await requireAccess("contest_impact");
+
+  const campaigns = await listCampaignOptions();
+  const campaign = campaigns.find((c) => c.key === campaignKey);
+  if (!campaign) return { error: "Unknown campaign." };
+
+  const report = await getContestMonthReport(campaignKey, month);
+  const result = await getOrGenerateContestReport(campaignKey, campaign.label, month, report, { force: true });
   revalidatePath("/contest-impact");
   return result;
 }

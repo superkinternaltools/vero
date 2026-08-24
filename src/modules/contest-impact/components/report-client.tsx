@@ -2,19 +2,22 @@
 
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
-import { Maximize2, MessageCircle, RefreshCw } from "lucide-react";
+import type { ReactNode } from "react";
+import { Maximize2, MessageCircle, RefreshCw, ChevronDown } from "lucide-react";
 import { SelectSearch } from "@/core/ui/select-search";
 import { Modal } from "@/core/ui/modal";
 import { cn } from "@/core/lib/utils";
-import { SELL_METRICS, GROUP_LABELS } from "../types";
+import { SELL_METRICS, GROUP_LABELS, DIAGNOSIS_VERDICT_LABELS } from "../types";
 import { ChatPanel } from "./chat-panel";
-import { regenerateContestHeadline } from "../actions";
+import { regenerateContestHeadline, regenerateContestReport } from "../actions";
 import type { ContestHeadline } from "../headline";
+import type { ContestReport } from "../queries";
 import type {
   CampaignOption,
   ComparisonBasis,
   ContestGroup,
   ContestMonthReport,
+  DiagnosisVerdict,
   MetricKind,
   MetricSeries,
   StoreRow,
@@ -483,7 +486,7 @@ function InventorySummarySection({ report }: { report: ContestMonthReport }) {
 // ==================== views ====================
 
 type View = "summary" | "metrics" | "stores" | "execution";
-const VIEW_LABELS: Record<View, string> = { summary: "Summary", metrics: "Detailed metrics", stores: "Store performance", execution: "Execution analysis" };
+const VIEW_LABELS: Record<View, string> = { summary: "Summary", metrics: "Detailed metrics", stores: "Store performance", execution: "Is it working?" };
 
 function SummaryView({
   report,
@@ -949,7 +952,50 @@ function StoresView({ report, basis }: { report: ContestMonthReport; basis: Comp
   );
 }
 
-function ExecutionView({ report, basis }: { report: ContestMonthReport; basis: ComparisonBasis }) {
+const VERDICT_STYLE: Record<DiagnosisVerdict, { bg: string; text: string; border: string }> = {
+  working: { bg: "bg-success/10", text: "text-success", border: "border-l-success" },
+  working_caveat: { bg: "bg-success/10", text: "text-success", border: "border-l-success" },
+  not_working_supply_store: { bg: "bg-danger/10", text: "text-danger", border: "border-l-danger" },
+  not_working_supply_warehouse: { bg: "bg-danger/10", text: "text-danger", border: "border-l-danger" },
+  not_working_rubric: { bg: "bg-danger/10", text: "text-danger", border: "border-l-danger" },
+  not_working_demand: { bg: "bg-danger/10", text: "text-danger", border: "border-l-danger" },
+  inconclusive: { bg: "bg-warning/10", text: "text-warning", border: "border-l-warning" },
+};
+
+const TREND_LABEL: Record<string, string> = { improving: "improving", stable: "steady", fading: "fading" };
+
+function Disclosure({ summary, children }: { summary: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-2xl border border-border bg-card p-5">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 text-left text-sm font-semibold text-foreground"
+      >
+        <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
+        {open ? "Hide" : "Show"} {summary}
+      </button>
+      {open && <div className="mt-4 space-y-4">{children}</div>}
+    </div>
+  );
+}
+
+function IsItWorkingView({
+  report,
+  basis,
+  aiReport,
+  onRegenerateReport,
+  regeneratingReport,
+}: {
+  report: ContestMonthReport;
+  basis: ComparisonBasis;
+  aiReport: ContestReport | { error: string } | null;
+  onRegenerateReport: () => void;
+  regeneratingReport: boolean;
+}) {
+  const gmvMetric = report.metrics.find((m) => m.key === "gmv")!;
   const byStatus = useMemo(() => {
     const groups = new Map<string, { statuses: string[]; group: ContestGroup; values: number[]; n: number }>();
     for (const s of report.stores) {
@@ -982,66 +1028,172 @@ function ExecutionView({ report, basis }: { report: ContestMonthReport; basis: C
   const xFor = (fill: number) => SPADX + (fill / 100) * (SW - SPADX - 20);
   const yFor = (g: number) => SH - SPADY - ((g - gMin) / (gMax - gMin || 1)) * (SH - SPADY * 2);
 
+  const diagnosis = aiReport && "diagnosis" in aiReport ? aiReport.diagnosis : null;
+  const narrative = aiReport && "narrative" in aiReport ? aiReport.narrative : null;
+  const reportError = aiReport && "error" in aiReport ? aiReport.error : null;
+  const style = diagnosis ? VERDICT_STYLE[diagnosis.verdict] : VERDICT_STYLE.inconclusive;
+
   return (
     <div className="space-y-4">
-      <div className="rounded-2xl border border-border bg-card p-5">
-        <h3 className="text-sm font-semibold text-foreground">GMV growth by exact status</h3>
-        <p className="mb-4 mt-1 text-xs text-muted-foreground">
-          Approved and poor-execution stores aren&apos;t uniform — each status performs differently. Growth shown is the median {fmtMonthLabel(basis)}.
-        </p>
-        <div className="space-y-3">
-          {byStatus.map((s) => {
-            const width = s.median == null ? 4 : Math.max(4, (Math.abs(s.median) / maxAbs) * 100);
-            return (
-              <div key={s.label} className="flex items-center gap-3">
-                <span className="w-40 shrink-0 truncate text-xs text-foreground" title={s.label}>{s.label}</span>
-                <div className="h-6 flex-1 rounded bg-input">
-                  <div
-                    className="flex h-full items-center rounded pl-2 text-[11px] font-medium text-background"
-                    style={{ width: `${width}%`, background: GROUP_COLOR[s.group] }}
-                  >
-                    {fmtGrowth(s.median, "currency")}
-                  </div>
-                </div>
-                <span className="w-16 shrink-0 text-right text-[11px] text-muted-foreground">{s.n} stores</span>
-              </div>
-            );
-          })}
+      <div className={cn("rounded-2xl border border-border bg-card p-6 border-l-[3px]", style.border)}>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Is it working? · AI-generated</span>
+          <button
+            type="button"
+            onClick={onRegenerateReport}
+            disabled={regeneratingReport}
+            className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary hover:text-primary disabled:opacity-50"
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", regeneratingReport && "animate-spin")} />
+            Regenerate
+          </button>
         </div>
+
+        {diagnosis && narrative ? (
+          <>
+            <span className={cn("mt-3 inline-block rounded-full px-2.5 py-0.5 text-xs font-medium", style.bg, style.text)}>
+              {DIAGNOSIS_VERDICT_LABELS[diagnosis.verdict]}
+              {diagnosis.trend && `, ${TREND_LABEL[diagnosis.trend]}`}
+            </span>
+            <p className="mt-2 text-lg font-semibold tracking-tight text-foreground">{narrative.verdictSentence}</p>
+            <p className="mt-2 text-sm text-muted-foreground">{narrative.mechanism}</p>
+            {narrative.rootCause && (
+              <div className="mt-3 rounded-lg bg-input p-3">
+                <p className="text-xs font-semibold text-foreground">Likely cause</p>
+                <p className="mt-1 text-sm text-muted-foreground">{narrative.rootCause}</p>
+              </div>
+            )}
+            {diagnosis.selectionBiasCaveat && (
+              <p className="mt-3 text-xs text-muted-foreground">
+                Note: fewer than half of approved stores have last-year data, so this verdict leans on the control-group comparison rather than
+                year-on-year — approved and control stores&apos; comparability before the contest can&apos;t be fully verified.
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="mt-2 text-sm text-muted-foreground">
+            {reportError ? `${reportError} Try regenerating.` : regeneratingReport ? "Working out whether this contest is working…" : "No report yet — try regenerating."}
+          </p>
+        )}
       </div>
 
-      <div className="rounded-2xl border border-border bg-card p-5">
-        <h3 className="text-sm font-semibold text-foreground">Store availability vs sales growth</h3>
-        <p className="mb-4 mt-1 text-xs text-muted-foreground">Each dot is one store that ran the campaign — does poor execution track with poor stock availability?</p>
-        <svg viewBox={`0 0 ${SW} ${SH}`} className="h-auto w-full">
-          <line x1={SPADX} x2={SW - 10} y1={SH - SPADY} y2={SH - SPADY} stroke="var(--color-border)" strokeWidth={1} />
-          <line x1={SPADX} x2={SPADX} y1={10} y2={SH - SPADY} stroke="var(--color-border)" strokeWidth={1} />
-          <text x={SPADX - 8} y={16} fontSize={10} textAnchor="end" fill="var(--color-muted-foreground)">{fmtGrowth(gMax, "currency")}</text>
-          <text x={SPADX - 8} y={SH - SPADY} fontSize={10} textAnchor="end" fill="var(--color-muted-foreground)">{fmtGrowth(gMin, "currency")}</text>
-          <text x={SPADX} y={SH - 4} fontSize={10} fill="var(--color-muted-foreground)">0% available</text>
-          <text x={SW - 10} y={SH - 4} fontSize={10} textAnchor="end" fill="var(--color-muted-foreground)">100% available</text>
-          {scatterPoints.map((s) => {
-            const g = growthOf(s);
-            if (g == null || s.storeAvailability == null) return null;
-            return (
-              <circle
-                key={s.storeId}
-                cx={xFor(s.storeAvailability)}
-                cy={yFor(g)}
-                r={5}
-                fill={GROUP_COLOR[s.group]}
-                opacity={0.8}
-              >
-                <title>{`${s.storeName}: ${fmtPercent(s.storeAvailability)} available, ${fmtGrowth(g, "currency")}`}</title>
-              </circle>
-            );
-          })}
-        </svg>
-      </div>
+      <Disclosure summary="supporting evidence">
+        {evidenceOrder(diagnosis?.verdict).map((key, i) => (
+          <div key={key} className={i > 0 ? "border-t border-border pt-4" : undefined}>
+            {i === 0 && evidenceRelevance(diagnosis?.verdict) && (
+              <p className="mb-3 rounded-lg bg-input px-3 py-2 text-[11px] text-foreground">{evidenceRelevance(diagnosis?.verdict)}</p>
+            )}
+            {key === "byStatus" && (
+              <div>
+                <h4 className="text-xs font-semibold text-foreground">GMV growth by exact status</h4>
+                <p className="mb-3 mt-1 text-[11px] text-muted-foreground">
+                  Approved and poor-execution stores aren&apos;t uniform — each status performs differently. Growth shown is the median {fmtMonthLabel(basis)}.
+                </p>
+                <div className="space-y-3">
+                  {byStatus.map((s) => {
+                    const width = s.median == null ? 4 : Math.max(4, (Math.abs(s.median) / maxAbs) * 100);
+                    return (
+                      <div key={s.label} className="flex items-center gap-3">
+                        <span className="w-40 shrink-0 truncate text-xs text-foreground" title={s.label}>{s.label}</span>
+                        <div className="h-6 flex-1 rounded bg-input">
+                          <div
+                            className="flex h-full items-center rounded pl-2 text-[11px] font-medium text-background"
+                            style={{ width: `${width}%`, background: GROUP_COLOR[s.group] }}
+                          >
+                            {fmtGrowth(s.median, "currency")}
+                          </div>
+                        </div>
+                        <span className="w-16 shrink-0 text-right text-[11px] text-muted-foreground">{s.n} stores</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
-      <StockVsGmvScatter stores={report.stores} />
+            {key === "availability" && (
+              <div>
+                <h4 className="text-xs font-semibold text-foreground">Store availability vs sales growth</h4>
+                <p className="mb-3 mt-1 text-[11px] text-muted-foreground">Each dot is one store that ran the campaign — does poor execution track with poor stock availability?</p>
+                <svg viewBox={`0 0 ${SW} ${SH}`} className="h-auto w-full">
+                  <line x1={SPADX} x2={SW - 10} y1={SH - SPADY} y2={SH - SPADY} stroke="var(--color-border)" strokeWidth={1} />
+                  <line x1={SPADX} x2={SPADX} y1={10} y2={SH - SPADY} stroke="var(--color-border)" strokeWidth={1} />
+                  <text x={SPADX - 8} y={16} fontSize={10} textAnchor="end" fill="var(--color-muted-foreground)">{fmtGrowth(gMax, "currency")}</text>
+                  <text x={SPADX - 8} y={SH - SPADY} fontSize={10} textAnchor="end" fill="var(--color-muted-foreground)">{fmtGrowth(gMin, "currency")}</text>
+                  <text x={SPADX} y={SH - 4} fontSize={10} fill="var(--color-muted-foreground)">0% available</text>
+                  <text x={SW - 10} y={SH - 4} fontSize={10} textAnchor="end" fill="var(--color-muted-foreground)">100% available</text>
+                  {scatterPoints.map((s) => {
+                    const g = growthOf(s);
+                    if (g == null || s.storeAvailability == null) return null;
+                    return (
+                      <circle
+                        key={s.storeId}
+                        cx={xFor(s.storeAvailability)}
+                        cy={yFor(g)}
+                        r={5}
+                        fill={GROUP_COLOR[s.group]}
+                        opacity={0.8}
+                      >
+                        <title>{`${s.storeName}: ${fmtPercent(s.storeAvailability)} available, ${fmtGrowth(g, "currency")}`}</title>
+                      </circle>
+                    );
+                  })}
+                </svg>
+              </div>
+            )}
+
+            {key === "stockGmv" && <StockVsGmvScatter stores={report.stores} />}
+
+            {key === "weeklyTrend" && (
+              <div>
+                <h4 className="text-xs font-semibold text-foreground">Sales, week by week — approved vs poor vs control</h4>
+                <p className="mb-3 mt-1 text-[11px] text-muted-foreground">
+                  If approved and poor are tracking control rather than pulling ahead of it, that&apos;s a demand-side story, not an execution one.
+                </p>
+                <GroupLegend />
+                <div className="mt-3">
+                  <WeeklyChart metric={gmvMetric} basis={basis} height={220} />
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </Disclosure>
     </div>
   );
+}
+
+type EvidenceKey = "byStatus" | "availability" | "stockGmv" | "weeklyTrend";
+
+/** Which chart actually bears on the diagnosed cause goes first — showing
+ * all three in a fixed order regardless of verdict is what made them feel
+ * arbitrary. The availability scatter is dropped entirely outside the supply
+ * verdicts: when stock is fine (which is exactly when it's not the lead
+ * cause), every store clusters at the high end of the x-axis and the chart
+ * shows nothing. weeklyTrend (approved/poor/control side by side) is what
+ * actually shows a demand/rubric story. */
+function evidenceOrder(verdict?: DiagnosisVerdict): EvidenceKey[] {
+  if (verdict === "not_working_supply_store" || verdict === "not_working_supply_warehouse") return ["availability", "byStatus", "stockGmv"];
+  if (verdict === "not_working_rubric" || verdict === "not_working_demand") return ["weeklyTrend", "byStatus", "stockGmv"];
+  if (verdict === "working" || verdict === "working_caveat") return ["stockGmv", "weeklyTrend", "byStatus"];
+  return ["byStatus", "weeklyTrend", "stockGmv"];
+}
+
+function evidenceRelevance(verdict?: DiagnosisVerdict): string | null {
+  switch (verdict) {
+    case "not_working_supply_store":
+    case "not_working_supply_warehouse":
+      return "This is what the supply diagnosis is based on — low availability tracking with low growth is what rules this in as a stock problem, not an execution one.";
+    case "not_working_rubric":
+      return "This is the evidence behind the verdict above — poor/rejected stores are tracking about as fast as, or faster than, control despite not being approved.";
+    case "not_working_demand":
+      return "This is the evidence behind the verdict above — neither approved nor poor-execution stores are pulling ahead of control this month.";
+    case "working":
+    case "working_caveat":
+      return "This is what confirms the lift reflects real conversion rather than just more stock on shelf.";
+    default:
+      return null;
+  }
 }
 
 /** Plots stock on shelf against GMV, per store — makes the capacity ceiling
@@ -1067,9 +1219,9 @@ function StockVsGmvScatter({ stores }: { stores: StoreRow[] }) {
   const lineEndX = medianSellThrough != null && medianSellThrough > 0 ? Math.min(xMax, yMax / medianSellThrough) : 0;
 
   return (
-    <div className="rounded-2xl border border-border bg-card p-5">
-      <h3 className="text-sm font-semibold text-foreground">Stock on shelf vs GMV</h3>
-      <p className="mb-4 mt-1 text-xs text-muted-foreground">
+    <div>
+      <h4 className="text-xs font-semibold text-foreground">Stock on shelf vs GMV</h4>
+      <p className="mb-3 mt-1 text-[11px] text-muted-foreground">
         Each dot is one store. The dashed line is the group&apos;s median sell-through — above it converts better than typical, below it converts
         worse; far left means low GMV is a stock ceiling, not necessarily poor execution.
       </p>
@@ -1109,6 +1261,7 @@ export function ReportClient({
   month,
   report,
   headline,
+  aiReport,
 }: {
   campaigns: CampaignOption[];
   months: string[];
@@ -1116,6 +1269,7 @@ export function ReportClient({
   month: string | null;
   report: ContestMonthReport | null;
   headline: ContestHeadline | { error: string } | null;
+  aiReport: ContestReport | { error: string } | null;
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -1128,16 +1282,31 @@ export function ReportClient({
   // server value instead of showing a stale override.
   const [headlineOverride, setHeadlineOverride] = useState<{ key: string; result: ContestHeadline | { error: string } } | null>(null);
   const [regeneratingHeadline, setRegeneratingHeadline] = useState(false);
-  const headlineKey = `${campaignKey ?? ""}:${month ?? ""}`;
-  const headlineState = headlineOverride && headlineOverride.key === headlineKey ? headlineOverride.result : headline;
+  const campaignMonthKey = `${campaignKey ?? ""}:${month ?? ""}`;
+  const headlineState = headlineOverride && headlineOverride.key === campaignMonthKey ? headlineOverride.result : headline;
 
   function handleRegenerateHeadline() {
     if (!campaignKey || !month) return;
     setRegeneratingHeadline(true);
     startTransition(async () => {
       const result = await regenerateContestHeadline(campaignKey, month);
-      setHeadlineOverride({ key: headlineKey, result });
+      setHeadlineOverride({ key: campaignMonthKey, result });
       setRegeneratingHeadline(false);
+    });
+  }
+
+  // Same keyed-override pattern as the headline, for the "Is it working?" report.
+  const [reportOverride, setReportOverride] = useState<{ key: string; result: ContestReport | { error: string } } | null>(null);
+  const [regeneratingReport, setRegeneratingReport] = useState(false);
+  const aiReportState = reportOverride && reportOverride.key === campaignMonthKey ? reportOverride.result : aiReport;
+
+  function handleRegenerateReport() {
+    if (!campaignKey || !month) return;
+    setRegeneratingReport(true);
+    startTransition(async () => {
+      const result = await regenerateContestReport(campaignKey, month);
+      setReportOverride({ key: campaignMonthKey, result });
+      setRegeneratingReport(false);
     });
   }
 
@@ -1222,7 +1391,15 @@ export function ReportClient({
             )}
             {view === "metrics" && <MetricsView report={report} basis={basis} />}
             {view === "stores" && <StoresView report={report} basis={basis} />}
-            {view === "execution" && <ExecutionView report={report} basis={basis} />}
+            {view === "execution" && (
+              <IsItWorkingView
+                report={report}
+                basis={basis}
+                aiReport={aiReportState}
+                onRegenerateReport={handleRegenerateReport}
+                regeneratingReport={regeneratingReport}
+              />
+            )}
           </div>
 
           {campaignKey && month && (

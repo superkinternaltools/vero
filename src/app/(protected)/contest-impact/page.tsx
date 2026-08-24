@@ -5,6 +5,7 @@ import {
   getContestMonthReport,
   getUnclassifiedStatuses,
   getOrGenerateContestHeadline,
+  getOrGenerateContestReport,
 } from "@/modules/contest-impact/queries";
 import { ensureDummyData } from "@/modules/contest-impact/seed";
 import { ContestImpactTabs } from "@/modules/contest-impact/components/contest-impact-tabs";
@@ -41,13 +42,26 @@ export default async function ContestImpactPage({
   }
 
   const report = campaignKey && month ? await getContestMonthReport(campaignKey, month) : null;
-  const headline =
-    report && campaignKey && month ? await getOrGenerateContestHeadline(campaignKey, campaignLabel, month, report) : null;
+  const [headline, aiReport] =
+    report && campaignKey && month
+      ? await Promise.all([
+          getOrGenerateContestHeadline(campaignKey, campaignLabel, month, report),
+          getOrGenerateContestReport(campaignKey, campaignLabel, month, report),
+        ])
+      : [null, null];
 
   return (
     <div>
       <ContestImpactTabs />
-      <ReportClient campaigns={campaigns} months={months} campaignKey={campaignKey} month={month} report={report} headline={headline} />
+      <ReportClient
+        campaigns={campaigns}
+        months={months}
+        campaignKey={campaignKey}
+        month={month}
+        report={report}
+        headline={headline}
+        aiReport={aiReport}
+      />
     </div>
   );
 }
