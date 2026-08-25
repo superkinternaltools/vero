@@ -1,6 +1,4 @@
 import { createClient } from "@/core/db/server";
-import { computeHeadlineFingerprint, generateContestHeadline } from "./headline";
-import type { ContestHeadline } from "./headline";
 import { diagnoseContest } from "./diagnosis";
 import { computeReportFingerprint, generateContestReportNarrative } from "./report-ai";
 import { SELL_METRICS } from "./types";
@@ -713,59 +711,6 @@ function previousMonthKey(month: string): string {
   const [y, m] = month.split("-").map(Number);
   const d = new Date(Date.UTC(y, m - 2, 1));
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-/** Cached AI headline for one campaign + month — reused as long as the
- * report's numbers haven't changed (data_fingerprint), regenerated the
- * moment they do, so the report doesn't call OpenAI on every view. Passes
- * the previous month's headline along for continuity, not to copy from. */
-export async function getOrGenerateContestHeadline(
-  campaignKey: string,
-  campaignLabel: string,
-  month: string,
-  report: ContestMonthReport,
-  opts?: { force?: boolean },
-): Promise<ContestHeadline | { error: string }> {
-  const supabase = await createClient();
-  const monthDate = `${month}-01`;
-  const fingerprint = computeHeadlineFingerprint(campaignLabel, month, report);
-
-  if (!opts?.force) {
-    const { data: cached } = await supabase
-      .from("contest_ai_headlines")
-      .select("headline, summary, data_fingerprint")
-      .eq("campaign_key", campaignKey)
-      .eq("month", monthDate)
-      .maybeSingle();
-    if (cached && (cached as any).data_fingerprint === fingerprint) {
-      return { headline: (cached as any).headline, summary: (cached as any).summary };
-    }
-  }
-
-  const prevMonth = previousMonthKey(month);
-  const { data: prevRow } = await supabase
-    .from("contest_ai_headlines")
-    .select("headline, summary")
-    .eq("campaign_key", campaignKey)
-    .eq("month", `${prevMonth}-01`)
-    .maybeSingle();
-
-  const result = await generateContestHeadline({
-    campaignLabel,
-    month,
-    report,
-    previous: prevRow ? { month: prevMonth, headline: (prevRow as any).headline, summary: (prevRow as any).summary } : null,
-  });
-  if ("error" in result) return result;
-
-  await supabase
-    .from("contest_ai_headlines")
-    .upsert(
-      { campaign_key: campaignKey, month: monthDate, headline: result.headline, summary: result.summary, data_fingerprint: fingerprint },
-      { onConflict: "campaign_key,month" },
-    );
-
-  return result;
 }
 
 export type ContestReport = { diagnosis: ContestDiagnosis; narrative: ContestReportNarrative };

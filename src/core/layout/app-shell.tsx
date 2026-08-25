@@ -26,8 +26,8 @@ export function AppShell({
           <MobileNav allowed={allowed} displayName={displayName} email={email} />
         </header>
 
-        <main className="flex-1 overflow-x-hidden">
-          <div className="mx-auto max-w-6xl px-5 py-8 md:px-10">{children}</div>
+        <main className="flex-1 overflow-x-clip">
+          <div className="mx-auto max-w-[100rem] px-5 py-8 md:px-10">{children}</div>
         </main>
       </div>
     </div>

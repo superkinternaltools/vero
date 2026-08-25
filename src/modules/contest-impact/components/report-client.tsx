@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import type { ReactNode } from "react";
 import { Maximize2, MessageCircle, RefreshCw, ChevronDown } from "lucide-react";
 import { SelectSearch } from "@/core/ui/select-search";
@@ -9,8 +9,7 @@ import { Modal } from "@/core/ui/modal";
 import { cn } from "@/core/lib/utils";
 import { SELL_METRICS, GROUP_LABELS, DIAGNOSIS_VERDICT_LABELS } from "../types";
 import { ChatPanel } from "./chat-panel";
-import { regenerateContestHeadline, regenerateContestReport } from "../actions";
-import type { ContestHeadline } from "../headline";
+import { regenerateContestReport } from "../actions";
 import type { ContestReport } from "../queries";
 import type {
   CampaignOption,
@@ -501,81 +500,11 @@ function InventorySummarySection({ report }: { report: ContestMonthReport }) {
 type View = "summary" | "metrics" | "stores" | "execution";
 const VIEW_LABELS: Record<View, string> = { summary: "Summary", metrics: "Detailed metrics", stores: "Store performance", execution: "Is it working?" };
 
-function SummaryView({
-  report,
-  basis,
-  onNavigate,
-  onOpenChat,
-  headline,
-  onRegenerateHeadline,
-  regeneratingHeadline,
-}: {
-  report: ContestMonthReport;
-  basis: ComparisonBasis;
-  onNavigate: (v: View) => void;
-  onOpenChat: () => void;
-  headline: ContestHeadline | { error: string } | null;
-  onRegenerateHeadline: () => void;
-  regeneratingHeadline: boolean;
-}) {
-  const { verdict } = report;
-  const gmv = report.metrics.find((m) => m.key === "gmv")!;
-
-  const incrementalPositive = (verdict.incrementalValueVsLastMonth ?? 0) >= 0;
-
-  const headlineText = headline && "headline" in headline ? headline.headline : null;
-  const summaryText = headline && "summary" in headline ? headline.summary : null;
-  const headlineError = headline && "error" in headline ? headline.error : null;
-
+function SummaryView({ report, onNavigateToStores }: { report: ContestMonthReport; onNavigateToStores: () => void }) {
   return (
     <div className="space-y-4">
-      <div className={cn("rounded-2xl border border-border bg-card p-6 border-l-[3px]", incrementalPositive ? "border-l-success" : "border-l-danger")}>
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Headline finding · AI-generated</span>
-          <div className="flex shrink-0 items-center gap-2">
-            <button
-              type="button"
-              onClick={onRegenerateHeadline}
-              disabled={regeneratingHeadline}
-              className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary hover:text-primary disabled:opacity-50"
-            >
-              <RefreshCw className={cn("h-3.5 w-3.5", regeneratingHeadline && "animate-spin")} />
-              Regenerate
-            </button>
-            <button
-              type="button"
-              onClick={onOpenChat}
-              className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary hover:text-primary"
-            >
-              <MessageCircle className="h-3.5 w-3.5" />
-              Chat with Vero
-            </button>
-          </div>
-        </div>
-        {headlineText && summaryText ? (
-          <>
-            <p className="mt-2 text-xl font-semibold tracking-tight text-foreground">{headlineText}</p>
-            <p className="mt-2 text-sm text-muted-foreground">{summaryText}</p>
-          </>
-        ) : (
-          <p className="mt-2 text-sm text-muted-foreground">
-            {headlineError ? `${headlineError} Try regenerating.` : regeneratingHeadline ? "Writing this month's headline…" : "No headline yet — try regenerating."}
-          </p>
-        )}
-      </div>
-
       <InventorySummarySection report={report} />
-
-      <ExecutionGroupsCard report={report} basis={basis} onNavigate={onNavigate} />
-
-      <div className="rounded-2xl border border-border bg-card p-5">
-        <h3 className="text-sm font-semibold text-foreground">Sales (GMV), week by week</h3>
-        <p className="mb-3 mt-1 text-xs text-muted-foreground">Average rupee sales per store, per week — not indexed, not percentage.</p>
-        <GroupLegend />
-        <div className="mt-3">
-          <WeeklyChart metric={gmv} basis={basis} />
-        </div>
-      </div>
+      <ExecutionGroupsCard report={report} onNavigateToStores={onNavigateToStores} />
     </div>
   );
 }
@@ -584,16 +513,11 @@ function SummaryView({
  * — plus a single week-by-week strip for how the approved/poor pool
  * reshuffles. Sell-through (not a raw stock rupee figure) is the number that
  * actually says who's converting better, and the weekly counts live in
- * exactly one place instead of two. */
-function ExecutionGroupsCard({
-  report,
-  basis,
-  onNavigate,
-}: {
-  report: ContestMonthReport;
-  basis: ComparisonBasis;
-  onNavigate: (v: View) => void;
-}) {
+ * exactly one place instead of two. Carries its own compare-against toggle
+ * — each chart/table on the page compares independently now, rather than
+ * one setting driving the whole report. */
+function ExecutionGroupsCard({ report, onNavigateToStores }: { report: ContestMonthReport; onNavigateToStores: () => void }) {
+  const [basis, setBasis] = useState<ComparisonBasis>("lastMonth");
   const gmv = report.metrics.find((m) => m.key === "gmv")!;
   const sellThrough = report.metrics.find((m) => m.key === "sellThrough");
   const doh = report.metrics.find((m) => m.key === "doh");
@@ -605,10 +529,15 @@ function ExecutionGroupsCard({
 
   return (
     <div className="rounded-2xl border border-border bg-card p-5">
-      <h3 className="text-sm font-semibold text-foreground">Execution groups</h3>
-      <p className="mb-3 mt-1 text-xs text-muted-foreground">
-        Approved — campaign ran, approved. Poor — campaign ran, not approved. Control — no campaign data at all.
-      </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">Execution groups</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Approved — campaign ran, approved. Poor — campaign ran, not approved. Control — no campaign data at all.
+          </p>
+        </div>
+        <ComparisonToggle basis={basis} onChange={setBasis} />
+      </div>
       <div className="divide-y divide-border">
         {groups.map((g) => {
           const growth = basis === "lastMonth" ? gmv.monthGrowthVsLastMonth[g] : gmv.monthGrowthVsLastYear[g];
@@ -620,7 +549,7 @@ function ExecutionGroupsCard({
             <button
               key={g}
               type="button"
-              onClick={() => onNavigate("stores")}
+              onClick={onNavigateToStores}
               className="grid w-full grid-cols-1 items-center gap-2 py-3.5 text-left first:pt-3 last:pb-0 sm:grid-cols-[1.3fr_1fr_0.9fr_0.7fr] sm:gap-4"
             >
               <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
@@ -710,13 +639,17 @@ function InventoryCaveat({ report }: { report: ContestMonthReport }) {
   );
 }
 
-function FullDataTable({ report, basis }: { report: ContestMonthReport; basis: ComparisonBasis }) {
+function FullDataTable({ report }: { report: ContestMonthReport }) {
+  const [basis, setBasis] = useState<ComparisonBasis>("lastMonth");
   const groups: ContestGroup[] = ["approved", "poor", "control"];
   return (
     <div className="overflow-x-auto rounded-2xl border border-border bg-card">
-      <div className="p-5 pb-2">
-        <h3 className="text-sm font-semibold text-foreground">Full data table</h3>
-        <p className="mt-1 text-xs text-muted-foreground">Average per store per week, and change {fmtMonthLabel(basis)}, per metric and group.</p>
+      <div className="flex flex-wrap items-start justify-between gap-3 p-5 pb-2">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">Full data table</h3>
+          <p className="mt-1 text-xs text-muted-foreground">Average per store per week, and change {fmtMonthLabel(basis)}, per metric and group.</p>
+        </div>
+        <ComparisonToggle basis={basis} onChange={setBasis} />
       </div>
       <table className="w-full text-sm">
         <thead>
@@ -858,43 +791,58 @@ function WeeklyMoveDiagnosis({ report }: { report: ContestMonthReport }) {
   );
 }
 
-function MetricsView({ report, basis }: { report: ContestMonthReport; basis: ComparisonBasis }) {
+/** One metric's card, with its own compare-against toggle — each graph on
+ * the page now compares independently rather than sharing one setting. */
+function MetricCard({ metric }: { metric: MetricSeries }) {
+  const [basis, setBasis] = useState<ComparisonBasis>("lastMonth");
+  const meta = SELL_METRICS.find((sm) => sm.key === metric.key)!;
+  return (
+    <div className="rounded-2xl border border-border bg-card p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex flex-wrap items-baseline gap-3">
+            <h3 className="text-sm font-semibold text-foreground">{meta.label}</h3>
+            <div className="flex gap-4 text-xs text-muted-foreground">
+              {(["approved", "poor", "control"] as ContestGroup[]).map((g) => (
+                <span key={g}>
+                  <span style={{ color: GROUP_COLOR[g] }} className="font-medium">
+                    {fmtHard(metric.monthAvg[g], meta.kind)}
+                  </span>{" "}
+                  avg/wk
+                </span>
+              ))}
+            </div>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">{meta.what}</p>
+        </div>
+        <ComparisonToggle basis={basis} onChange={setBasis} />
+      </div>
+      <div className="mt-3">
+        <WeeklyChart metric={metric} basis={basis} />
+      </div>
+    </div>
+  );
+}
+
+function MetricsView({ report }: { report: ContestMonthReport }) {
   return (
     <div className="space-y-4">
       <InventoryCaveat report={report} />
       <GroupLegend />
 
-      {report.metrics.map((m) => {
-        const meta = SELL_METRICS.find((sm) => sm.key === m.key)!;
-        return (
-          <div key={m.key} className="rounded-2xl border border-border bg-card p-5">
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <h3 className="text-sm font-semibold text-foreground">{meta.label}</h3>
-              <div className="flex gap-4 text-xs text-muted-foreground">
-                {(["approved", "poor", "control"] as ContestGroup[]).map((g) => (
-                  <span key={g}>
-                    <span style={{ color: GROUP_COLOR[g] }} className="font-medium">
-                      {fmtHard(m.monthAvg[g], meta.kind)}
-                    </span>{" "}
-                    avg/wk
-                  </span>
-                ))}
-              </div>
-            </div>
-            <p className="mb-3 mt-1 text-xs text-muted-foreground">{meta.what}</p>
-            <WeeklyChart metric={m} basis={basis} />
-          </div>
-        );
-      })}
+      {report.metrics.map((m) => (
+        <MetricCard key={m.key} metric={m} />
+      ))}
 
       <WeeklyMoveDiagnosis report={report} />
 
-      <FullDataTable report={report} basis={basis} />
+      <FullDataTable report={report} />
     </div>
   );
 }
 
-function StoresView({ report, basis }: { report: ContestMonthReport; basis: ComparisonBasis }) {
+function StoresView({ report }: { report: ContestMonthReport }) {
+  const [basis, setBasis] = useState<ComparisonBasis>("lastMonth");
   const groupOrder: Record<ContestGroup, number> = { approved: 0, poor: 1, control: 2 };
   const sorted = [...report.stores].sort((a, b) => {
     if (a.group !== b.group) return groupOrder[a.group] - groupOrder[b.group];
@@ -905,13 +853,16 @@ function StoresView({ report, basis }: { report: ContestMonthReport; basis: Comp
 
   return (
     <div className="rounded-2xl border border-border bg-card">
-      <div className="p-5 pb-3">
-        <h3 className="text-sm font-semibold text-foreground">Store performance</h3>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Every store, ranked by GMV growth {fmtMonthLabel(basis)}. Group is shown per week — it can change month to month, and even week to week.
-          Sell-through (GMV ÷ stock on shelf) is the fairer read when comparing stores carrying very different stock levels.
-        </p>
-        <div className="mt-3"><GroupLegend /></div>
+      <div className="flex flex-wrap items-start justify-between gap-3 p-5 pb-3">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">Store performance</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Every store, ranked by GMV growth {fmtMonthLabel(basis)}. Group is shown per week — it can change month to month, and even week to week.
+            Sell-through (GMV ÷ stock on shelf) is the fairer read when comparing stores carrying very different stock levels.
+          </p>
+          <div className="mt-3"><GroupLegend /></div>
+        </div>
+        <ComparisonToggle basis={basis} onChange={setBasis} />
       </div>
       <div className="max-h-[600px] overflow-y-auto">
         {sorted.map((s) => {
@@ -997,17 +948,20 @@ function Disclosure({ summary, children }: { summary: string; children: ReactNod
 
 function IsItWorkingView({
   report,
-  basis,
   aiReport,
   onRegenerateReport,
   regeneratingReport,
+  onOpenChat,
 }: {
   report: ContestMonthReport;
-  basis: ComparisonBasis;
   aiReport: ContestReport | { error: string } | null;
   onRegenerateReport: () => void;
   regeneratingReport: boolean;
+  onOpenChat: () => void;
 }) {
+  // The verdict itself is deliberately basis-independent (see diagnosis.ts) —
+  // this toggle only affects the supporting-evidence charts below it.
+  const [basis, setBasis] = useState<ComparisonBasis>("lastMonth");
   const gmvMetric = report.metrics.find((m) => m.key === "gmv")!;
   const byStatus = useMemo(() => {
     const groups = new Map<string, { statuses: string[]; group: ContestGroup; values: number[]; n: number }>();
@@ -1051,15 +1005,25 @@ function IsItWorkingView({
       <div className={cn("rounded-2xl border border-border bg-card p-6 border-l-[3px]", style.border)}>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Is it working? · AI-generated</span>
-          <button
-            type="button"
-            onClick={onRegenerateReport}
-            disabled={regeneratingReport}
-            className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary hover:text-primary disabled:opacity-50"
-          >
-            <RefreshCw className={cn("h-3.5 w-3.5", regeneratingReport && "animate-spin")} />
-            Regenerate
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={onRegenerateReport}
+              disabled={regeneratingReport}
+              className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary hover:text-primary disabled:opacity-50"
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", regeneratingReport && "animate-spin")} />
+              Regenerate
+            </button>
+            <button
+              type="button"
+              onClick={onOpenChat}
+              className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary hover:text-primary"
+            >
+              <MessageCircle className="h-3.5 w-3.5" />
+              Chat with Vero
+            </button>
+          </div>
         </div>
 
         {diagnosis && narrative ? (
@@ -1091,6 +1055,9 @@ function IsItWorkingView({
       </div>
 
       <Disclosure summary="supporting evidence">
+        <div className="flex justify-end">
+          <ComparisonToggle basis={basis} onChange={setBasis} />
+        </div>
         {evidenceOrder(diagnosis?.verdict).map((key, i) => (
           <div key={key} className={i > 0 ? "border-t border-border pt-4" : undefined}>
             {i === 0 && evidenceRelevance(diagnosis?.verdict) && (
@@ -1276,7 +1243,6 @@ export function ReportClient({
   campaignKey,
   month,
   report,
-  headline,
   aiReport,
 }: {
   campaigns: CampaignOption[];
@@ -1284,34 +1250,18 @@ export function ReportClient({
   campaignKey: string | null;
   month: string | null;
   report: ContestMonthReport | null;
-  headline: ContestHeadline | { error: string } | null;
   aiReport: ContestReport | { error: string } | null;
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
-  const [view, setView] = useState<View>("summary");
-  const [basis, setBasis] = useState<ComparisonBasis>("lastMonth");
+  const [activeSection, setActiveSection] = useState<View>("summary");
   const [chatOpen, setChatOpen] = useState(false);
-  // A regenerated headline overrides the server-provided one only for the
-  // campaign/month it was generated for — keyed rather than mirrored via an
-  // effect, so switching campaign or month falls straight back to the
-  // server value instead of showing a stale override.
-  const [headlineOverride, setHeadlineOverride] = useState<{ key: string; result: ContestHeadline | { error: string } } | null>(null);
-  const [regeneratingHeadline, setRegeneratingHeadline] = useState(false);
   const campaignMonthKey = `${campaignKey ?? ""}:${month ?? ""}`;
-  const headlineState = headlineOverride && headlineOverride.key === campaignMonthKey ? headlineOverride.result : headline;
 
-  function handleRegenerateHeadline() {
-    if (!campaignKey || !month) return;
-    setRegeneratingHeadline(true);
-    startTransition(async () => {
-      const result = await regenerateContestHeadline(campaignKey, month);
-      setHeadlineOverride({ key: campaignMonthKey, result });
-      setRegeneratingHeadline(false);
-    });
-  }
-
-  // Same keyed-override pattern as the headline, for the "Is it working?" report.
+  // Same keyed-override pattern used elsewhere: a regenerated report
+  // overrides the server-provided one only for the campaign/month it was
+  // generated for, so switching campaign or month falls straight back to
+  // the server value instead of showing a stale override.
   const [reportOverride, setReportOverride] = useState<{ key: string; result: ContestReport | { error: string } } | null>(null);
   const [regeneratingReport, setRegeneratingReport] = useState(false);
   const aiReportState = reportOverride && reportOverride.key === campaignMonthKey ? reportOverride.result : aiReport;
@@ -1332,9 +1282,34 @@ export function ReportClient({
     const m = next.month !== undefined ? next.month : month;
     if (campaign) params.set("campaign", campaign);
     if (m) params.set("month", m);
-    setView("summary");
+    setActiveSection("summary");
+    window.scrollTo({ top: 0 });
     startTransition(() => router.replace(`/contest-impact?${params.toString()}`, { scroll: false }));
   }
+
+  function scrollToSection(v: View) {
+    document.getElementById(`sec-${v}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  // Real scrollspy: highlights whichever section is actually in view as the
+  // page scrolls, not just whichever was last clicked.
+  useEffect(() => {
+    if (!report) return;
+    const sections = (Object.keys(VIEW_LABELS) as View[])
+      .map((v) => document.getElementById(`sec-${v}`))
+      .filter((el): el is HTMLElement => el != null);
+    if (!sections.length) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (visible.length > 0) setActiveSection(visible[0].target.id.replace("sec-", "") as View);
+      },
+      { rootMargin: "-10% 0px -70% 0px", threshold: 0 },
+    );
+    sections.forEach((el) => observer.observe(el));
+    return () => observer.disconnect();
+  }, [report]);
 
   const campaignOptions = campaigns.map((c) => ({ id: c.key, label: c.label }));
 
@@ -1373,61 +1348,64 @@ export function ReportClient({
       )}
 
       {report && (
-        <>
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex w-fit rounded-xl border border-border bg-input p-0.5">
+        <div className="mt-4 flex items-start gap-6">
+          <nav className="sticky top-4 hidden w-40 shrink-0 self-start lg:block">
+            <p className="mb-2 pl-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">On this page</p>
+            <div className="space-y-0.5">
               {(Object.keys(VIEW_LABELS) as View[]).map((v) => (
                 <button
                   key={v}
                   type="button"
-                  onClick={() => setView(v)}
+                  onClick={() => scrollToSection(v)}
                   className={cn(
-                    "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
-                    view === v ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                    "block w-full rounded-lg border-l-2 px-3 py-1.5 text-left text-xs font-medium transition-colors",
+                    activeSection === v ? "border-primary bg-primary/5 text-primary" : "border-transparent text-muted-foreground hover:text-foreground",
                   )}
                 >
                   {VIEW_LABELS[v]}
                 </button>
               ))}
             </div>
-            <ComparisonToggle basis={basis} onChange={setBasis} />
-          </div>
+          </nav>
 
-          <div className="mt-4">
-            {view === "summary" && (
-              <SummaryView
-                report={report}
-                basis={basis}
-                onNavigate={setView}
-                onOpenChat={() => setChatOpen(true)}
-                headline={headlineState}
-                onRegenerateHeadline={handleRegenerateHeadline}
-                regeneratingHeadline={regeneratingHeadline}
-              />
-            )}
-            {view === "metrics" && <MetricsView report={report} basis={basis} />}
-            {view === "stores" && <StoresView report={report} basis={basis} />}
-            {view === "execution" && (
+          <div className="min-w-0 flex-1 space-y-10">
+            <section id="sec-summary" className="scroll-mt-4">
+              <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{VIEW_LABELS.summary}</h2>
+              <SummaryView report={report} onNavigateToStores={() => scrollToSection("stores")} />
+            </section>
+
+            <section id="sec-metrics" className="scroll-mt-4">
+              <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{VIEW_LABELS.metrics}</h2>
+              <MetricsView report={report} />
+            </section>
+
+            <section id="sec-stores" className="scroll-mt-4">
+              <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{VIEW_LABELS.stores}</h2>
+              <StoresView report={report} />
+            </section>
+
+            <section id="sec-execution" className="scroll-mt-4">
+              <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{VIEW_LABELS.execution}</h2>
               <IsItWorkingView
                 report={report}
-                basis={basis}
                 aiReport={aiReportState}
                 onRegenerateReport={handleRegenerateReport}
                 regeneratingReport={regeneratingReport}
+                onOpenChat={() => setChatOpen(true)}
               />
-            )}
+            </section>
           </div>
+        </div>
+      )}
 
-          {campaignKey && month && (
-            <ChatPanel
-              open={chatOpen}
-              onClose={() => setChatOpen(false)}
-              campaignKey={campaignKey}
-              campaignLabel={campaigns.find((c) => c.key === campaignKey)?.label ?? campaignKey}
-              month={month}
-            />
-          )}
-        </>
+      {report && campaignKey && month && (
+        <ChatPanel
+          open={chatOpen}
+          onClose={() => setChatOpen(false)}
+          campaignKey={campaignKey}
+          campaignLabel={campaigns.find((c) => c.key === campaignKey)?.label ?? campaignKey}
+          month={month}
+        />
       )}
     </div>
   );
