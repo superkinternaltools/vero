@@ -94,9 +94,9 @@ export type SellMetricKey = "gmv" | "penetration" | "avgUnit" | "categoryContrib
 /** How a metric is formatted and how its growth is expressed — every metric
  * is now averaged across the stores in a group (see queries.ts `aggregate`),
  * so this only controls display: currency symbol, percent sign, a plain
- * number, a turnover ratio (e.g. "1.4x"), or a day count, and whether a
- * change is a percentage-point diff or a percent change. */
-export type MetricKind = "currency" | "percent" | "number" | "ratio" | "days";
+ * number, or a day count, and whether a change is a percentage-point diff or
+ * a percent change. */
+export type MetricKind = "currency" | "percent" | "number" | "days";
 
 export const SELL_METRICS: { key: SellMetricKey; label: string; what: string; kind: MetricKind }[] = [
   { key: "gmv", label: "Sales (GMV)", what: "Average rupee sales per store in the group.", kind: "currency" },
@@ -107,13 +107,13 @@ export const SELL_METRICS: { key: SellMetricKey; label: string; what: string; ki
   {
     key: "sellThrough",
     label: "Sell-through",
-    what: "GMV as a share of the stock that was on shelf that week — a turnover ratio, not a capacity percentage, so it can exceed 1x when stock moves fast.",
-    kind: "ratio",
+    what: "Formula: (GMV ÷ in-store value) × 100 — the share of that week's shelf stock that actually sold, as a %. Not a capped percentage: it can exceed 100% when stock moves fast and gets replenished mid-week.",
+    kind: "percent",
   },
   {
     key: "doh",
     label: "Days of hand",
-    what: "7 × in-store value ÷ GMV — how many days the current shelf stock would last at that week's sales pace. The exact reciprocal of sell-through, scaled to days: a high number means slow-moving, overstocked; a low number means fast-moving.",
+    what: "Formula: 7 × (in-store value ÷ GMV) — how many days the current shelf stock would last at that week's sales pace. The exact reciprocal of sell-through, scaled to days: a high number means slow-moving, overstocked; a low number means fast-moving.",
     kind: "days",
   },
 ];
@@ -168,7 +168,7 @@ export type StoreRow = {
   storeAvailability: number | null;
   /** Average rupee value of stock on this store's shelf, per week this month. */
   inStoreValue: number | null;
-  /** gmv ÷ inStoreValue — this store's own turnover ratio, not capped at 1x. */
+  /** (gmv ÷ inStoreValue) × 100 — this store's own turnover, as a %, not capped at 100. */
   sellThrough: number | null;
   /** 7 × inStoreValue ÷ gmv — this store's own days-of-hand, the reciprocal of sellThrough in days. */
   doh: number | null;

@@ -467,7 +467,11 @@ export async function getContestMonthReport(campaignKey: string, month: string):
     const dohGrowthVsLastYear = emptyGroupValues<number | null>(null);
     const n = emptyGroupValues<number>(0);
 
-    const sellThroughRatio = (gmv: number | null, stock: number | null) => (gmv != null && stock != null && stock !== 0 ? gmv / stock : null);
+    // Sell-through is expressed as a % (of shelf stock sold that week), not a
+    // bare 0-1 ratio — ×100 here, at the single source, rather than at every
+    // display site. Growth is a percentage-POINT diff (kind "percent") to
+    // match every other %-kind metric, not a relative % change.
+    const sellThroughPct = (gmv: number | null, stock: number | null) => (gmv != null && stock != null && stock !== 0 ? (gmv / stock) * 100 : null);
     const dohRatio = (gmv: number | null, stock: number | null) => (gmv != null && stock != null && gmv !== 0 ? (stock / gmv) * 7 : null);
 
     for (const g of GROUPS) {
@@ -479,10 +483,10 @@ export async function getContestMonthReport(campaignKey: string, month: string):
       const lyGmv = aggregate(rowsInGroup.map((r) => r.last_year_gmv).filter((v): v is number => v != null));
       const lyStock = aggregate(rowsInGroup.map((r) => r.last_year_in_store_value).filter((v): v is number => v != null));
 
-      const thisSt = sellThroughRatio(thisGmv, thisStock);
+      const thisSt = sellThroughPct(thisGmv, thisStock);
       stValue[g] = thisSt;
-      stGrowthVsLastMonth[g] = growthFor(thisSt, sellThroughRatio(lmGmv, lmStock), "ratio");
-      stGrowthVsLastYear[g] = growthFor(thisSt, sellThroughRatio(lyGmv, lyStock), "ratio");
+      stGrowthVsLastMonth[g] = growthFor(thisSt, sellThroughPct(lmGmv, lmStock), "percent");
+      stGrowthVsLastYear[g] = growthFor(thisSt, sellThroughPct(lyGmv, lyStock), "percent");
 
       const thisDoh = dohRatio(thisGmv, thisStock);
       dohValue[g] = thisDoh;
@@ -589,7 +593,7 @@ export async function getContestMonthReport(campaignKey: string, month: string):
     const avgGmvForStore = aggregate(gmvVals);
     const avgStockForStore = aggregate(stockVals);
     const sellThroughForStore =
-      avgGmvForStore != null && avgStockForStore != null && avgStockForStore !== 0 ? avgGmvForStore / avgStockForStore : null;
+      avgGmvForStore != null && avgStockForStore != null && avgStockForStore !== 0 ? (avgGmvForStore / avgStockForStore) * 100 : null;
     const dohForStore = avgGmvForStore != null && avgStockForStore != null && avgGmvForStore !== 0 ? (avgStockForStore / avgGmvForStore) * 7 : null;
 
     const storeStatuses = statusByStore.get(storeId) ?? [];

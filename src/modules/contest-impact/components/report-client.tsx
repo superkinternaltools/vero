@@ -21,6 +21,7 @@ import type {
   MetricKind,
   MetricSeries,
   StoreRow,
+  WeeklyGroupCounts,
 } from "../types";
 
 const selectClass =
@@ -52,7 +53,6 @@ function fmtPercent(v: number | null): string {
 function fmtHard(v: number | null, kind: MetricKind): string {
   if (kind === "currency") return fmtINR(v);
   if (kind === "percent") return fmtPercent(v);
-  if (kind === "ratio") return v == null ? "—" : `${v.toFixed(2)}x`;
   if (kind === "days") return v == null ? "—" : `${v.toFixed(1)}d`;
   return fmtNum(v);
 }
@@ -150,6 +150,7 @@ function WeeklyChart({
     hover &&
     metric.weekly.find((w) => w.week === hover.week) &&
     { week: hover.week, value: metric.weekly.find((w) => w.week === hover.week)!.value[hover.group],
+      n: metric.weekly.find((w) => w.week === hover.week)!.n[hover.group],
       growth: basis === "lastMonth"
         ? metric.weekly.find((w) => w.week === hover.week)!.growthVsLastMonth[hover.group]
         : metric.weekly.find((w) => w.week === hover.week)!.growthVsLastYear[hover.group] };
@@ -214,6 +215,7 @@ function WeeklyChart({
           <div className="text-[11px] opacity-80">
             {fmtGrowth(hoveredPoint.growth, meta.kind)} {fmtMonthLabel(basis)}
           </div>
+          <div className="text-[11px] opacity-80">{hoveredPoint.n} {hoveredPoint.n === 1 ? "store" : "stores"}</div>
         </div>
       )}
       <p className="mt-2 text-center text-[11px] text-muted-foreground">Hover a point for growth {fmtMonthLabel(basis)}</p>
@@ -235,10 +237,17 @@ const STOCK_SERIES_LABEL: Record<StockSeries, string> = { total: "Total", approv
  * focus it — the others fade) and hover tooltips showing the exact value. */
 function StoreAvailabilityChart({
   weekly,
+  groupCounts,
 }: {
   weekly: { week: number; totalStoreAvailability: number | null; approvedStoreAvailability: number | null; poorStoreAvailability: number | null }[];
+  groupCounts: WeeklyGroupCounts[];
 }) {
   const [hover, setHover] = useState<{ series: StockSeries; week: number } | null>(null);
+  const countFor = (series: StockSeries, week: number): number | null => {
+    const wk = groupCounts.find((w) => w.week === week);
+    if (!wk) return null;
+    return series === "total" ? wk.approved + wk.poor : wk[series];
+  };
   const [focus, setFocus] = useState<StockSeries | null>(null);
   const W = 620, H = 240, PADX = 55, PADY = 24;
   const min = 0;
@@ -334,7 +343,11 @@ function StoreAvailabilityChart({
               top: `${(yFor(hoveredValue.value ?? 0) / H) * 100 - 2}%`,
             }}
           >
-            {STOCK_SERIES_LABEL[hover.series]}: {fmtPercent(hoveredValue.value)}
+            <div>{STOCK_SERIES_LABEL[hover.series]}: {fmtPercent(hoveredValue.value)}</div>
+            {(() => {
+              const n = countFor(hover.series, hover.week);
+              return n != null ? <div className="text-[11px] opacity-80">{n} {n === 1 ? "store" : "stores"}</div> : null;
+            })()}
           </div>
         )}
       </div>
@@ -462,7 +475,7 @@ function InventorySummarySection({ report }: { report: ContestMonthReport }) {
 
         <h4 className="mb-1 mt-4 text-xs font-semibold text-foreground">Week-on-week</h4>
         <ExpandableChart title="Store availability, week on week">
-          <StoreAvailabilityChart weekly={report.stock.weekly} />
+          <StoreAvailabilityChart weekly={report.stock.weekly} groupCounts={report.weeklyGroupCounts} />
         </ExpandableChart>
       </div>
 
@@ -621,7 +634,7 @@ function ExecutionGroupsCard({
                 <p className="text-[11px] text-muted-foreground">GMV · {fmtGrowth(growth, "currency")} {fmtMonthLabel(basis)}</p>
               </div>
               <div>
-                <span className="text-lg font-semibold tabular-nums text-foreground">{st != null ? `${st.toFixed(2)}x` : "—"}</span>
+                <span className="text-lg font-semibold tabular-nums text-foreground">{st != null ? `${st.toFixed(1)}%` : "—"}</span>
                 <p className="text-[11px] text-muted-foreground">
                   sell-through{dohVal != null && ` · ${dohVal.toFixed(0)}d on hand`}
                 </p>
@@ -937,7 +950,7 @@ function StoresView({ report, basis }: { report: ContestMonthReport; basis: Comp
                     {fmtINR(s.inStoreValue)} stock
                   </div>
                   <div className="min-w-[70px] text-right text-xs font-medium text-foreground">
-                    {s.sellThrough == null ? "—" : `${s.sellThrough.toFixed(2)}x`} sell-thru
+                    {s.sellThrough == null ? "—" : `${s.sellThrough.toFixed(1)}%`} sell-thru
                   </div>
                   <div className="min-w-[70px] text-right text-xs text-muted-foreground">
                     {s.doh == null ? "—" : `${s.doh.toFixed(1)}d`} on hand
@@ -1206,6 +1219,9 @@ function StockVsGmvScatter({ stores }: { stores: StoreRow[] }) {
 
   const sellThroughs = points.map((s) => s.sellThrough).filter((v): v is number => v != null).sort((a, b) => a - b);
   const medianSellThrough = sellThroughs.length ? sellThroughs[Math.floor(sellThroughs.length / 2)] : null;
+  // sellThrough is stored as a % (0-100+); the reference line's geometry needs
+  // the underlying raw ratio (GMV = stock × ratio), so convert back for the math only.
+  const medianRatio = medianSellThrough != null ? medianSellThrough / 100 : null;
 
   const xVals = points.map((s) => s.inStoreValue!);
   const yVals = points.map((s) => s.gmv!);
@@ -1216,7 +1232,7 @@ function StockVsGmvScatter({ stores }: { stores: StoreRow[] }) {
   const xFor = (v: number) => PADX + (v / xMax) * (W - PADX - 20);
   const yFor = (v: number) => H - PADY - (v / yMax) * (H - PADY * 2);
 
-  const lineEndX = medianSellThrough != null && medianSellThrough > 0 ? Math.min(xMax, yMax / medianSellThrough) : 0;
+  const lineEndX = medianRatio != null && medianRatio > 0 ? Math.min(xMax, yMax / medianRatio) : 0;
 
   return (
     <div>
@@ -1228,8 +1244,8 @@ function StockVsGmvScatter({ stores }: { stores: StoreRow[] }) {
       <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full">
         <line x1={PADX} x2={W - 10} y1={H - PADY} y2={H - PADY} stroke="var(--color-border)" strokeWidth={1} />
         <line x1={PADX} x2={PADX} y1={10} y2={H - PADY} stroke="var(--color-border)" strokeWidth={1} />
-        {medianSellThrough != null && (
-          <line x1={xFor(0)} y1={yFor(0)} x2={xFor(lineEndX)} y2={yFor(lineEndX * medianSellThrough)} stroke="var(--color-warning)" strokeDasharray="6 4" strokeWidth={1.5} />
+        {medianRatio != null && (
+          <line x1={xFor(0)} y1={yFor(0)} x2={xFor(lineEndX)} y2={yFor(lineEndX * medianRatio)} stroke="var(--color-warning)" strokeDasharray="6 4" strokeWidth={1.5} />
         )}
         <text x={PADX - 8} y={16} fontSize={10} textAnchor="end" fill="var(--color-muted-foreground)">{fmtINR(yMax)}</text>
         <text x={PADX - 8} y={H - PADY} fontSize={10} textAnchor="end" fill="var(--color-muted-foreground)">₹0</text>
@@ -1244,7 +1260,7 @@ function StockVsGmvScatter({ stores }: { stores: StoreRow[] }) {
             fill={GROUP_COLOR[s.group]}
             opacity={0.8}
           >
-            <title>{`${s.storeName}: ${fmtINR(s.inStoreValue)} stock, ${fmtINR(s.gmv)} GMV, ${s.sellThrough == null ? "no sell-through data" : `${s.sellThrough.toFixed(2)}x sell-through`}`}</title>
+            <title>{`${s.storeName}: ${fmtINR(s.inStoreValue)} stock, ${fmtINR(s.gmv)} GMV, ${s.sellThrough == null ? "no sell-through data" : `${s.sellThrough.toFixed(1)}% sell-through`}`}</title>
           </circle>
         ))}
       </svg>
