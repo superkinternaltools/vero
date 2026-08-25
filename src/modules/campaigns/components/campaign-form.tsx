@@ -2,12 +2,12 @@
 
 import { useState, useTransition, type ReactNode, type ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
-import { X, ImagePlus, FlaskConical, PlusCircle, Trash2 } from "lucide-react";
+import { X, ImagePlus, FlaskConical, PlusCircle, Trash2, Sparkles, ClipboardPaste } from "lucide-react";
 import { Input } from "@/core/ui/input";
 import { Button } from "@/core/ui/button";
 import { MultiSelect } from "@/core/ui/multi-select";
 import { createClient } from "@/core/db/client";
-import { testAiPrompt } from "@/modules/ai-review/actions";
+import { testAiPrompt, generateRubric, generateInstructions } from "@/modules/ai-review/actions";
 import { StorePicker } from "./store-picker";
 import type { TestAiResult } from "@/modules/ai-review/actions";
 import { cn } from "@/core/lib/utils";
@@ -19,11 +19,12 @@ import type {
   AIStrictness,
   CaptureMode,
   PayoutTier,
+  CampaignSku,
 } from "../types";
 import { createCampaign, updateCampaign } from "../actions";
 
 type Opt = { id: string; name: string };
-type StoreOpt = { id: string; label: string };
+type StoreOpt = { id: string; label: string; name: string; closed: boolean };
 
 const selectClass =
   "w-full rounded-xl border border-transparent bg-input px-4 py-3 text-sm text-foreground focus:border-primary focus:bg-card focus:outline-none focus:ring-2 focus:ring-primary/30";
@@ -69,6 +70,59 @@ function Toggle({
 }
 
 const SKIP_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+/** Accepts tab-separated (pasted from Excel/Sheets) or comma-separated
+ * (CSV) rows of "name, qty, facings, shelf #" — one SKU per line. Skips a
+ * header row when present (heuristic: qty column isn't a plain number). */
+function parseSkuPaste(text: string): CampaignSku[] {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const rows = lines.map((line) =>
+    (line.includes("\t") ? line.split("\t") : line.split(",")).map((c) => c.trim()),
+  );
+  const looksLikeHeader = rows.length > 0 && rows[0].length > 1 && !/^\d+$/.test(rows[0][1] ?? "");
+  const dataRows = looksLikeHeader ? rows.slice(1) : rows;
+  return dataRows
+    .filter((c) => c[0])
+    .map((c) => ({
+      name: c[0] ?? "",
+      qty: Number(c[1]) || 0,
+      facings: Number(c[2]) || 0,
+      shelf_number: c[3] ?? "",
+    }));
+}
+
+/** Header-matched (not positional) so column order from a pasted Excel
+ * sheet doesn't matter — looks for columns containing "label", "score"
+ * (the min-max range, e.g. "5-6" or a single "4"), "payout", and a per-tier
+ * "prompt" (the condition text — kept, since it feeds rubric generation).
+ * Any other column (e.g. an approval-threshold column) is ignored. */
+function parseTierPaste(text: string): PayoutTier[] {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 2) return [];
+  const rows = lines.map((line) =>
+    (line.includes("\t") ? line.split("\t") : line.split(",")).map((c) => c.trim()),
+  );
+  const header = rows[0].map((h) => h.toLowerCase());
+  const idxLabel = header.findIndex((h) => h.includes("label"));
+  const idxScore = header.findIndex((h) => h.includes("score") && !h.includes("threshold") && !h.includes("prompt"));
+  const idxPayout = header.findIndex((h) => h.includes("payout"));
+  const idxPrompt = header.findIndex((h) => h.includes("prompt"));
+  if (idxLabel < 0 || idxScore < 0 || idxPayout < 0) return [];
+
+  return rows
+    .slice(1)
+    .filter((r) => r[idxLabel])
+    .map((r) => {
+      const range = r[idxScore] ?? "";
+      const rangeMatch = range.match(/(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)/);
+      const single = range.match(/^(\d+(?:\.\d+)?)$/);
+      const min = rangeMatch ? Number(rangeMatch[1]) : single ? Number(single[1]) : 0;
+      const max = rangeMatch ? Number(rangeMatch[2]) : single ? Number(single[1]) : 10;
+      const pct = Number((r[idxPayout] ?? "0").replace("%", "").trim()) || 0;
+      const scoring_prompt = idxPrompt >= 0 ? (r[idxPrompt] ?? "").trim() : "";
+      return { label: r[idxLabel] ?? "", min_score: min, max_score: max, pct, scoring_prompt };
+    });
+}
+
 function fmtSkipDate(d: string): string {
   const [y, m, day] = d.split("-").map(Number);
   return `${day} ${SKIP_MONTHS[m - 1]} ${y}`;
@@ -89,6 +143,7 @@ export function CampaignForm({
   jobTitles,
   stores,
   statuses,
+  categories,
 }: {
   mode: "create" | "edit";
   campaignId?: string;
@@ -98,6 +153,7 @@ export function CampaignForm({
   jobTitles: Opt[];
   stores: StoreOpt[];
   statuses: Opt[];
+  categories: Opt[];
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -112,6 +168,18 @@ export function CampaignForm({
   const [testPending, testStart] = useTransition();
   const [testResult, setTestResult] = useState<TestAiResult | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
+
+  const [rubricPending, rubricStart] = useTransition();
+  const [rubricError, setRubricError] = useState<string | null>(null);
+
+  const [instructionsPending, instructionsStart] = useTransition();
+  const [instructionsError, setInstructionsError] = useState<string | null>(null);
+
+  const [skuPasteMode, setSkuPasteMode] = useState(false);
+  const [skuPasteText, setSkuPasteText] = useState("");
+
+  const [tierPasteMode, setTierPasteMode] = useState(false);
+  const [tierPasteText, setTierPasteText] = useState("");
 
   function set<K extends keyof CampaignFormValues>(k: K, val: CampaignFormValues[K]) {
     setV((p) => ({ ...p, [k]: val }));
@@ -182,6 +250,35 @@ export function CampaignForm({
       });
       if (res.error) setTestError(res.error);
       else if (res.result) setTestResult(res.result);
+    });
+  }
+
+  function generateRubricFromSkus() {
+    if (v.scoring_rubric.trim() && !window.confirm("Replace the current rubric with a generated one?")) return;
+    setRubricError(null);
+    rubricStart(async () => {
+      const res = await generateRubric({
+        campaignName: v.name,
+        executionTypeName: executionTypes.find((t) => t.id === v.execution_type_id)?.name ?? null,
+        skus: v.skus,
+        payoutTiers: v.payout_model === "tiered" ? v.payout_tiers : [],
+      });
+      if (res.error) setRubricError(res.error);
+      else if (res.rubric) set("scoring_rubric", res.rubric);
+    });
+  }
+
+  function generateInstructionsFromSkus() {
+    if (v.instructions.trim() && !window.confirm("Replace the current instructions with generated ones?")) return;
+    setInstructionsError(null);
+    instructionsStart(async () => {
+      const res = await generateInstructions({
+        campaignName: v.name,
+        executionTypeName: executionTypes.find((t) => t.id === v.execution_type_id)?.name ?? null,
+        skus: v.skus,
+      });
+      if (res.error) setInstructionsError(res.error);
+      else if (res.instructions) set("instructions", res.instructions);
     });
   }
 
@@ -263,7 +360,177 @@ export function CampaignForm({
             </select>
           </div>
         </div>
+        <div className="space-y-1.5">
+          <label className={labelClass}>Category</label>
+          <select
+            className={selectClass}
+            value={v.category_id ?? ""}
+            onChange={(e) => set("category_id", e.target.value || null)}
+          >
+            <option value="">—</option>
+            {categories.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground">
+            e.g. Brand Visibility for Tide, Ariel, Surf Excel — lets you list the SKUs it&apos;s tracking below.
+            Add more categories in Settings.
+          </p>
+        </div>
       </Section>
+
+      {v.category_id && (
+        <Section title="SKUs">
+          <div className="flex items-center justify-between">
+            <label className={labelClass}>Tracked SKUs</label>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => { setSkuPasteMode((p) => !p); setSkuPasteText(""); }}
+                className={cn(
+                  "flex items-center gap-1 text-xs hover:underline",
+                  skuPasteMode ? "text-muted-foreground" : "text-primary",
+                )}
+              >
+                <ClipboardPaste className="h-3.5 w-3.5" />
+                {skuPasteMode ? "Cancel" : "Paste from CSV"}
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  set("skus", [...v.skus, { name: "", qty: 0, facings: 0, shelf_number: "" }])
+                }
+                className="flex items-center gap-1 text-xs text-primary hover:underline"
+              >
+                <PlusCircle className="h-3.5 w-3.5" />
+                Add SKU
+              </button>
+            </div>
+          </div>
+
+          {skuPasteMode && (
+            <div className="space-y-2 rounded-xl border border-border/60 bg-muted/30 p-3">
+              <textarea
+                value={skuPasteText}
+                onChange={(e) => setSkuPasteText(e.target.value)}
+                rows={4}
+                placeholder={
+                  "Paste rows from Excel/Sheets or CSV — one SKU per line:\n" +
+                  "Surf Excel Matic Liquid Top Load Bottle 1L, 4, 2, 1\n" +
+                  "Surf Excel Matic Liquid Top Load Pouch 4L, 6, 3, 2"
+                }
+                className={textareaClass + " font-mono text-xs"}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Columns: SKU name, Qty, Facings, Shelf # (Qty/Facings/Shelf # can be left blank).
+              </p>
+              {skuPasteText.trim() && (() => {
+                const parsed = parseSkuPaste(skuPasteText);
+                return (
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs font-medium text-success">{parsed.length} SKU{parsed.length !== 1 ? "s" : ""} parsed</span>
+                    <Button
+                      size="md"
+                      onClick={() => {
+                        set("skus", [...v.skus, ...parsed]);
+                        setSkuPasteMode(false);
+                        setSkuPasteText("");
+                      }}
+                      disabled={parsed.length === 0}
+                    >
+                      Add {parsed.length} SKU{parsed.length !== 1 ? "s" : ""}
+                    </Button>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          <div className="overflow-x-auto rounded-xl border border-border">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="px-3 py-2 text-left font-semibold">SKU name</th>
+                  <th className="px-3 py-2 text-left font-semibold">Qty</th>
+                  <th className="px-3 py-2 text-left font-semibold">Facings</th>
+                  <th className="px-3 py-2 text-left font-semibold">Shelf #</th>
+                  <th className="px-3 py-2" />
+                </tr>
+              </thead>
+              <tbody>
+                {v.skus.map((sku, i) => (
+                  <tr key={i} className="border-b border-border last:border-0">
+                    <td className="px-3 py-2">
+                      <Input
+                        type="text"
+                        value={sku.name}
+                        placeholder="e.g. Tide 1kg"
+                        onChange={(e) => {
+                          const skus = [...v.skus];
+                          skus[i] = { ...skus[i], name: e.target.value };
+                          set("skus", skus);
+                        }}
+                      />
+                    </td>
+                    <td className="px-3 py-2">
+                      <Input
+                        type="number"
+                        min="0"
+                        value={String(sku.qty)}
+                        onChange={(e) => {
+                          const skus = [...v.skus];
+                          skus[i] = { ...skus[i], qty: Number(e.target.value) };
+                          set("skus", skus);
+                        }}
+                      />
+                    </td>
+                    <td className="px-3 py-2">
+                      <Input
+                        type="number"
+                        min="0"
+                        value={String(sku.facings)}
+                        onChange={(e) => {
+                          const skus = [...v.skus];
+                          skus[i] = { ...skus[i], facings: Number(e.target.value) };
+                          set("skus", skus);
+                        }}
+                      />
+                    </td>
+                    <td className="px-3 py-2">
+                      <Input
+                        type="text"
+                        value={sku.shelf_number}
+                        placeholder="e.g. 3"
+                        onChange={(e) => {
+                          const skus = [...v.skus];
+                          skus[i] = { ...skus[i], shelf_number: e.target.value };
+                          set("skus", skus);
+                        }}
+                      />
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <button
+                        type="button"
+                        onClick={() => set("skus", v.skus.filter((_, j) => j !== i))}
+                        className="rounded-lg p-1 text-muted-foreground hover:bg-danger/10 hover:text-danger"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {v.skus.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="p-4 text-center text-xs text-muted-foreground">
+                      No SKUs yet — click &quot;Add SKU&quot; above.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+      )}
 
       <Section title="Schedule">
         <div className="grid gap-4 sm:grid-cols-2">
@@ -276,9 +543,6 @@ export function CampaignForm({
             <Input type="date" value={v.end_date ?? ""} onChange={(e) => set("end_date", e.target.value || null)} />
           </div>
         </div>
-        <Toggle label="Allow late uploads" hint="If off, tasks past their due date are marked Missed." checked={v.allow_late} onChange={(b) => set("allow_late", b)} />
-        <Toggle label="Skip weekends (daily)" checked={v.skip_weekends} onChange={(b) => set("skip_weekends", b)} />
-        <Toggle label="Skip holidays (daily)" checked={v.skip_holidays} onChange={(b) => set("skip_holidays", b)} />
         {v.frequency === "daily" && (
           <div className="space-y-2">
             <label className={labelClass}>Skip specific dates</label>
@@ -330,13 +594,25 @@ export function CampaignForm({
 
       <Section title="Instructions & reference">
         <div className="space-y-1.5">
-          <label className={labelClass}>Execution instructions</label>
+          <div className="flex items-center justify-between">
+            <label className={labelClass}>Execution instructions</label>
+            <button
+              type="button"
+              onClick={generateInstructionsFromSkus}
+              disabled={instructionsPending}
+              className="flex items-center gap-1 text-xs text-primary hover:underline disabled:opacity-50"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              {instructionsPending ? "Generating…" : "Generate from execution type & SKUs"}
+            </button>
+          </div>
           <textarea
             className={textareaClass}
             value={v.instructions}
             onChange={(e) => set("instructions", e.target.value)}
             placeholder="Place all products on the end-cap display, branding at eye level, fully stocked…"
           />
+          {instructionsError && <p className="text-xs font-medium text-danger">{instructionsError}</p>}
         </div>
         <div className="space-y-2">
           <label className={labelClass}>Reference images</label>
@@ -456,17 +732,72 @@ export function CampaignForm({
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <label className={labelClass}>Score tiers</label>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      set("payout_tiers", [...v.payout_tiers, { label: "", min_score: 0, max_score: 10, pct: 50 }])
-                    }
-                    className="flex items-center gap-1 text-xs text-primary hover:underline"
-                  >
-                    <PlusCircle className="h-3.5 w-3.5" />
-                    Add tier
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => { setTierPasteMode((p) => !p); setTierPasteText(""); }}
+                      className={cn(
+                        "flex items-center gap-1 text-xs hover:underline",
+                        tierPasteMode ? "text-muted-foreground" : "text-primary",
+                      )}
+                    >
+                      <ClipboardPaste className="h-3.5 w-3.5" />
+                      {tierPasteMode ? "Cancel" : "Paste from Excel"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        set("payout_tiers", [...v.payout_tiers, { label: "", min_score: 0, max_score: 10, pct: 50 }])
+                      }
+                      className="flex items-center gap-1 text-xs text-primary hover:underline"
+                    >
+                      <PlusCircle className="h-3.5 w-3.5" />
+                      Add tier
+                    </button>
+                  </div>
                 </div>
+
+                {tierPasteMode && (
+                  <div className="space-y-2 rounded-xl border border-border/60 bg-muted/30 p-3">
+                    <textarea
+                      value={tierPasteText}
+                      onChange={(e) => setTierPasteText(e.target.value)}
+                      rows={4}
+                      placeholder={
+                        "Paste a tier table from Excel/Sheets — needs a header row with " +
+                        "Label / Score (e.g. \"5-6\") / Payout columns. Other columns are ignored:\n" +
+                        "Label\tBrand Score\tPayout\nRejected\t0-3\t0%\nApproved\t7-10\t100%"
+                      }
+                      className={textareaClass + " font-mono text-xs"}
+                    />
+                    {tierPasteText.trim() && (() => {
+                      const parsed = parseTierPaste(tierPasteText);
+                      return (
+                        <div className="flex items-center gap-3">
+                          {parsed.length > 0 ? (
+                            <span className="text-xs font-medium text-success">{parsed.length} tier{parsed.length !== 1 ? "s" : ""} parsed</span>
+                          ) : (
+                            <span className="text-xs font-medium text-danger">
+                              No Label/Score/Payout columns found — check the header row.
+                            </span>
+                          )}
+                          <Button
+                            size="md"
+                            onClick={() => {
+                              set("payout_tiers", parsed);
+                              setTierPasteMode(false);
+                              setTierPasteText("");
+                            }}
+                            disabled={parsed.length === 0}
+                          >
+                            Replace with {parsed.length} tier{parsed.length !== 1 ? "s" : ""}
+                          </Button>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+
                 <div className="overflow-x-auto rounded-xl border border-border">
                   <table className="w-full text-sm">
                     <thead>
@@ -475,6 +806,7 @@ export function CampaignForm({
                         <th className="px-3 py-2 text-left font-semibold">Min score</th>
                         <th className="px-3 py-2 text-left font-semibold">Max score</th>
                         <th className="px-3 py-2 text-left font-semibold">Payout %</th>
+                        <th className="px-3 py-2 text-left font-semibold">Scoring prompt (for AI)</th>
                         <th className="px-3 py-2" />
                       </tr>
                     </thead>
@@ -532,6 +864,18 @@ export function CampaignForm({
                               }}
                             />
                           </td>
+                          <td className="px-3 py-2">
+                            <Input
+                              type="text"
+                              value={tier.scoring_prompt ?? ""}
+                              placeholder="e.g. 4 or more products present"
+                              onChange={(e) => {
+                                const tiers = [...v.payout_tiers];
+                                tiers[i] = { ...tiers[i], scoring_prompt: e.target.value };
+                                set("payout_tiers", tiers);
+                              }}
+                            />
+                          </td>
                           <td className="px-3 py-2 text-right">
                             <button
                               type="button"
@@ -547,7 +891,7 @@ export function CampaignForm({
                       ))}
                       {v.payout_tiers.length === 0 && (
                         <tr>
-                          <td colSpan={4} className="p-4 text-center text-xs text-muted-foreground">
+                          <td colSpan={5} className="p-4 text-center text-xs text-muted-foreground">
                             No tiers yet — click "Add tier" above.
                           </td>
                         </tr>
@@ -600,13 +944,28 @@ export function CampaignForm({
             </div>
             <Toggle label="Show AI score to reviewer" hint="Off enables the prevent-bias review flow." checked={v.ai_score_visible} onChange={(b) => set("ai_score_visible", b)} />
             <div className="space-y-1.5">
-              <label className={labelClass}>Brand scoring rubric</label>
+              <div className="flex items-center justify-between">
+                <label className={labelClass}>Brand scoring rubric</label>
+                <button
+                  type="button"
+                  onClick={generateRubricFromSkus}
+                  disabled={rubricPending}
+                  className="flex items-center gap-1 text-xs text-primary hover:underline disabled:opacity-50"
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  {rubricPending ? "Generating…" : "Generate from execution type & SKUs"}
+                </button>
+              </div>
               <textarea
                 className={textareaClass}
                 value={v.scoring_rubric}
                 onChange={(e) => set("scoring_rubric", e.target.value)}
                 placeholder="e.g. Full product facing forward = high score; missing signage = reject…"
               />
+              {rubricError && <p className="text-xs font-medium text-danger">{rubricError}</p>}
+              <p className="text-xs text-muted-foreground">
+                Drafts a rubric from the execution type and tracked SKUs above — always review before saving.
+              </p>
             </div>
 
             {/* Prompt tester */}
@@ -682,48 +1041,6 @@ export function CampaignForm({
             <label className={labelClass}>Number of photos (1–3)</label>
             <Input type="number" min={1} max={3} value={String(v.num_photos)} onChange={(e) => set("num_photos", Number(e.target.value))} />
           </div>
-        </div>
-      </Section>
-
-      <Section title="Submission window">
-        <div className="space-y-4">
-          <label className="flex cursor-pointer items-center gap-3">
-            <input
-              type="checkbox"
-              className="h-4 w-4 rounded border-border accent-primary"
-              checked={v.submission_window_start !== null}
-              onChange={(e) => {
-                if (e.target.checked) {
-                  set("submission_window_start", "09:00");
-                  set("submission_window_end", "12:00");
-                } else {
-                  set("submission_window_start", null);
-                  set("submission_window_end", null);
-                }
-              }}
-            />
-            <span className="text-sm text-foreground">Restrict submissions to a time window (IST)</span>
-          </label>
-          {v.submission_window_start !== null && (
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <label className={labelClass}>Window opens</label>
-                <Input
-                  type="time"
-                  value={v.submission_window_start ?? ""}
-                  onChange={(e) => set("submission_window_start", e.target.value)}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className={labelClass}>Window closes</label>
-                <Input
-                  type="time"
-                  value={v.submission_window_end ?? ""}
-                  onChange={(e) => set("submission_window_end", e.target.value)}
-                />
-              </div>
-            </div>
-          )}
         </div>
       </Section>
 

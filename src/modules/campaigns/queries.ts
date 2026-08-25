@@ -10,6 +10,7 @@ export async function listCampaigns(): Promise<CampaignListRow[]> {
       `
       id, name, frequency, status, payout_enabled, payout_amount,
       execution_types ( name ),
+      campaign_categories ( name ),
       campaign_departments ( departments ( name ) ),
       campaign_stores ( store_id )
       `,
@@ -29,6 +30,7 @@ export async function listCampaigns(): Promise<CampaignListRow[]> {
       .map((x: any) => x.departments?.name)
       .filter(Boolean),
     storeCount: (row.campaign_stores ?? []).length,
+    categoryName: row.campaign_categories?.name ?? null,
   }));
 }
 
@@ -76,11 +78,8 @@ export async function getCampaign(
     scoring_rubric: row.scoring_rubric ?? "",
     capture_mode: row.capture_mode,
     num_photos: row.num_photos,
-    allow_late: row.allow_late,
-    skip_weekends: row.skip_weekends,
-    skip_holidays: row.skip_holidays,
     skip_dates: row.skip_dates ?? [],
-    submission_window_start: row.submission_window_start ?? null,
-    submission_window_end: row.submission_window_end ?? null,
+    category_id: row.category_id,
+    skus: row.skus ?? [],
   };
 }

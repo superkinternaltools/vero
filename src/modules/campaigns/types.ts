@@ -1,5 +1,15 @@
 export type Frequency = "daily" | "weekly" | "monthly";
-export type PayoutTier = { label: string; min_score: number; max_score: number; pct: number };
+export type PayoutTier = {
+  label: string;
+  min_score: number;
+  max_score: number;
+  pct: number;
+  /** What must be true for a submission to land in this tier — feeds the
+   * rubric generator so it writes an authoritative ladder instead of
+   * inventing its own thresholds. Optional: blank for hand-entered tiers. */
+  scoring_prompt?: string;
+};
+export type CampaignSku = { name: string; qty: number; facings: number; shelf_number: string };
 /** Configurable in Settings (seeded: draft, active, paused, completed). */
 export type CampaignStatus = string;
 export type ScoreMode = "reviewer_preferred" | "ai_preferred" | "ai_auto_approve";
@@ -30,12 +40,9 @@ export type CampaignFormValues = {
   scoring_rubric: string;
   capture_mode: CaptureMode;
   num_photos: number;
-  allow_late: boolean;
-  skip_weekends: boolean;
-  skip_holidays: boolean;
   skip_dates: string[];
-  submission_window_start: string | null;
-  submission_window_end: string | null;
+  category_id: string | null;
+  skus: CampaignSku[];
 };
 
 export type CampaignListRow = {
@@ -48,6 +55,7 @@ export type CampaignListRow = {
   executionTypeName: string | null;
   departmentNames: string[];
   storeCount: number;
+  categoryName: string | null;
 };
 
 export const EMPTY_CAMPAIGN: CampaignFormValues = {
@@ -74,10 +82,7 @@ export const EMPTY_CAMPAIGN: CampaignFormValues = {
   scoring_rubric: "",
   capture_mode: "camera",
   num_photos: 1,
-  allow_late: false,
-  skip_weekends: false,
-  skip_holidays: false,
   skip_dates: [],
-  submission_window_start: null,
-  submission_window_end: null,
+  category_id: null,
+  skus: [],
 };

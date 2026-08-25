@@ -9,7 +9,7 @@ export function StorePicker({
   selected,
   onChange,
 }: {
-  options: { id: string; label: string }[];
+  options: { id: string; label: string; name?: string; closed?: boolean }[];
   selected: string[];
   onChange: (next: string[]) => void;
 }) {
@@ -44,16 +44,22 @@ export function StorePicker({
   }
 
   // Paste mode: parse names from pasted text (first tab-separated column per line).
+  // Matches against the full "code — name" label OR the plain store name alone —
+  // so a paste of bare store names (no code) still maps to the right store. If a
+  // bare name matches more than one store (name collision), it's left out of the
+  // auto-add and flagged separately rather than silently adding every match.
+  function matchesPasted(o: { label: string; name?: string }, n: string): boolean {
+    const needle = n.toLowerCase();
+    return o.label.toLowerCase() === needle || (!!o.name && o.name.toLowerCase() === needle);
+  }
   const pasteNames = pasteText
     .split("\n")
     .map((line) => line.split("\t")[0].trim())
     .filter(Boolean);
-  const pasteMatched = pasteNames.length > 0
-    ? options.filter((o) => pasteNames.some((n) => n.toLowerCase() === o.label.toLowerCase()))
-    : [];
-  const pasteNotFound = pasteNames.filter(
-    (n) => !options.some((o) => o.label.toLowerCase() === n.toLowerCase()),
-  );
+  const pasteNameMatches = pasteNames.map((n) => ({ name: n, matches: options.filter((o) => matchesPasted(o, n)) }));
+  const pasteMatched = pasteNameMatches.filter((m) => m.matches.length === 1).map((m) => m.matches[0]);
+  const pasteAmbiguous = pasteNameMatches.filter((m) => m.matches.length > 1).map((m) => m.name);
+  const pasteNotFound = pasteNameMatches.filter((m) => m.matches.length === 0).map((m) => m.name);
 
   function applyPaste() {
     const ids = pasteMatched.map((o) => o.id);
@@ -119,6 +125,13 @@ export function StorePicker({
               <div className="mt-2 space-y-1">
                 <p className="text-xs text-muted-foreground">
                   <span className="font-medium text-success">{pasteMatched.length} matched</span>
+                  {pasteAmbiguous.length > 0 && (
+                    <span className="text-warning">
+                      {", "}
+                      {pasteAmbiguous.length} ambiguous (matches more than one store — add manually):{" "}
+                      <span className="italic">{pasteAmbiguous.slice(0, 3).join(", ")}{pasteAmbiguous.length > 3 ? ` +${pasteAmbiguous.length - 3} more` : ""}</span>
+                    </span>
+                  )}
                   {pasteNotFound.length > 0 && (
                     <span className="text-danger">
                       {", "}
@@ -154,6 +167,11 @@ export function StorePicker({
                 >
                   <span className="flex h-4 w-4 shrink-0 rounded border border-border" />
                   <span className="truncate text-sm text-foreground">{o.label}</span>
+                  {o.closed && (
+                    <span className="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Closed
+                    </span>
+                  )}
                 </button>
               ))
             )}
@@ -210,6 +228,11 @@ export function StorePicker({
               >
                 <Check className="h-4 w-4 shrink-0 text-success" />
                 <span className="flex-1 truncate text-sm text-foreground">{o.label}</span>
+                {o.closed && (
+                  <span className="shrink-0 rounded-full bg-warning/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-warning">
+                    Closed
+                  </span>
+                )}
                 <button
                   type="button"
                   onClick={() => remove(o.id)}

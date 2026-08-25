@@ -29,12 +29,9 @@ function scalars(v: CampaignFormValues) {
     scoring_rubric: v.scoring_rubric || null,
     capture_mode: v.capture_mode,
     num_photos: v.num_photos > 0 ? v.num_photos : 1,
-    allow_late: v.allow_late,
-    skip_weekends: v.skip_weekends,
-    skip_holidays: v.skip_holidays,
     skip_dates: v.skip_dates,
-    submission_window_start: v.submission_window_start || null,
-    submission_window_end: v.submission_window_end || null,
+    category_id: v.category_id,
+    skus: v.category_id ? v.skus : [],
   };
 }
 
@@ -130,6 +127,21 @@ export async function bulkSetCampaignStatus(ids: string[], status: string): Prom
   return { updated: ids.length, failed };
 }
 
+/** Category-only bulk update — for retroactively tagging existing campaigns
+ * (e.g. marking past Tide/Ariel/Surf Excel campaigns as Brand Visibility)
+ * without touching anything else about them. */
+export async function bulkSetCampaignCategory(
+  ids: string[],
+  categoryId: string | null,
+): Promise<Result> {
+  if (!ids.length) return {};
+  const supabase = await createClient();
+  const { error } = await supabase.from("campaigns").update({ category_id: categoryId }).in("id", ids);
+  if (error) return { error: error.message };
+  revalidatePath("/campaigns");
+  return {};
+}
+
 export async function duplicateCampaign(formData: FormData): Promise<void> {
   const { redirect } = await import("next/navigation");
   const id = String(formData.get("id"));
@@ -173,10 +185,9 @@ export async function duplicateCampaign(formData: FormData): Promise<void> {
       scoring_rubric: s.scoring_rubric,
       capture_mode: s.capture_mode,
       num_photos: s.num_photos,
-      allow_late: s.allow_late,
-      skip_weekends: s.skip_weekends,
-      skip_holidays: s.skip_holidays,
       skip_dates: s.skip_dates ?? [],
+      category_id: s.category_id ?? null,
+      skus: s.skus ?? [],
     })
     .select("id")
     .single();

@@ -8,7 +8,7 @@ import { Button } from "@/core/ui/button";
 import { MultiSelect } from "@/core/ui/multi-select";
 import { GenerateTasksButton } from "./generate-tasks-button";
 import { cn } from "@/core/lib/utils";
-import { duplicateCampaign, deleteCampaign, bulkSetCampaignStatus } from "../actions";
+import { duplicateCampaign, deleteCampaign, bulkSetCampaignStatus, bulkSetCampaignCategory } from "../actions";
 import type { CampaignListRow, CampaignStatus, Frequency } from "../types";
 
 const FREQ: Record<Frequency, string> = { daily: "Daily", weekly: "Weekly", monthly: "Monthly" };
@@ -24,15 +24,18 @@ const statusStyle = (s: CampaignStatus) => STATUS_STYLES[s] ?? "bg-muted text-mu
 export function CampaignsClient({
   campaigns,
   statuses,
+  categories,
 }: {
   campaigns: CampaignListRow[];
   statuses: { id: string; name: string }[];
+  categories: { id: string; name: string }[];
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkStatus, setBulkStatus] = useState("");
+  const [bulkCategory, setBulkCategory] = useState("");
   const [bulkError, setBulkError] = useState<string | null>(null);
 
   // ── Filters ──────────────────────────────────────────────────────────────
@@ -41,6 +44,7 @@ export function CampaignsClient({
   const [filterDepts, setFilterDepts] = useState<string[]>([]);
   const [filterExecTypes, setFilterExecTypes] = useState<string[]>([]);
   const [filterFrequencies, setFilterFrequencies] = useState<string[]>([]);
+  const [filterCategories, setFilterCategories] = useState<string[]>([]);
 
   const deptOptions = useMemo(() => {
     const names = new Set<string>();
@@ -59,7 +63,8 @@ export function CampaignsClient({
     filterStatuses.length > 0 ||
     filterDepts.length > 0 ||
     filterExecTypes.length > 0 ||
-    filterFrequencies.length > 0;
+    filterFrequencies.length > 0 ||
+    filterCategories.length > 0;
 
   const visibleCampaigns = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -69,9 +74,10 @@ export function CampaignsClient({
       if (filterFrequencies.length && !filterFrequencies.includes(c.frequency)) return false;
       if (filterExecTypes.length && (!c.executionTypeName || !filterExecTypes.includes(c.executionTypeName))) return false;
       if (filterDepts.length && !c.departmentNames.some((d) => filterDepts.includes(d))) return false;
+      if (filterCategories.length && (!c.categoryName || !filterCategories.includes(c.categoryName))) return false;
       return true;
     });
-  }, [campaigns, search, filterStatuses, filterFrequencies, filterExecTypes, filterDepts]);
+  }, [campaigns, search, filterStatuses, filterFrequencies, filterExecTypes, filterDepts, filterCategories]);
 
   function clearFilters() {
     setSearch("");
@@ -79,6 +85,7 @@ export function CampaignsClient({
     setFilterDepts([]);
     setFilterExecTypes([]);
     setFilterFrequencies([]);
+    setFilterCategories([]);
   }
 
   function toggleSelect(id: string) {
@@ -97,6 +104,7 @@ export function CampaignsClient({
   function clearSelection() {
     setSelectedIds(new Set());
     setBulkStatus("");
+    setBulkCategory("");
     setBulkError(null);
   }
 
@@ -106,6 +114,17 @@ export function CampaignsClient({
     start(async () => {
       const res = await bulkSetCampaignStatus(Array.from(selectedIds), bulkStatus);
       if (res.failed) setBulkError(`${res.failed} of ${res.updated} had trouble updating tasks — status was still changed.`);
+      clearSelection();
+      router.refresh();
+    });
+  }
+
+  function applyBulkCategory() {
+    if (!bulkCategory) return;
+    setBulkError(null);
+    start(async () => {
+      const res = await bulkSetCampaignCategory(Array.from(selectedIds), bulkCategory);
+      if (res.error) setBulkError(res.error);
       clearSelection();
       router.refresh();
     });
@@ -132,7 +151,7 @@ export function CampaignsClient({
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-1 gap-3 rounded-2xl border border-border bg-card p-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+      <div className="mt-4 grid grid-cols-1 gap-3 rounded-2xl border border-border bg-card p-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <div className="relative">
           <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">Search</label>
           <Search className="absolute left-3 top-[calc(50%+8px)] h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -179,8 +198,17 @@ export function CampaignsClient({
             placeholder="All frequencies"
           />
         </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">Category</label>
+          <MultiSelect
+            options={categories.map((c) => ({ id: c.name, label: c.name }))}
+            selected={filterCategories}
+            onChange={setFilterCategories}
+            placeholder="All categories"
+          />
+        </div>
         {isFiltered && (
-          <div className="flex items-end xl:col-span-5">
+          <div className="flex items-end xl:col-span-6">
             <button
               type="button"
               onClick={clearFilters}
@@ -225,7 +253,14 @@ export function CampaignsClient({
                     className="h-4 w-4 cursor-pointer rounded accent-primary"
                   />
                 </td>
-                <td className="px-4 py-3 font-medium text-foreground">{c.name}</td>
+                <td className="px-4 py-3 font-medium text-foreground">
+                  {c.name}
+                  {c.categoryName && (
+                    <span className="ml-2 inline-flex rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary">
+                      {c.categoryName}
+                    </span>
+                  )}
+                </td>
                 <td className="px-4 py-3 text-muted-foreground">{c.executionTypeName ?? "—"}</td>
                 <td className="px-4 py-3 text-muted-foreground">{FREQ[c.frequency]}</td>
                 <td className="px-4 py-3 text-muted-foreground">
@@ -313,6 +348,24 @@ export function CampaignsClient({
               </select>
               {bulkStatus && (
                 <Button size="md" onClick={applyBulkStatus} disabled={pending}>
+                  Apply
+                </Button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <select
+                value={bulkCategory}
+                onChange={(e) => setBulkCategory(e.target.value)}
+                className="h-10 rounded-xl border border-border bg-input px-3 text-sm text-foreground focus:border-primary focus:outline-none"
+              >
+                <option value="">Set category…</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+              {bulkCategory && (
+                <Button size="md" onClick={applyBulkCategory} disabled={pending}>
                   Apply
                 </Button>
               )}

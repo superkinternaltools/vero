@@ -24,7 +24,6 @@ export function computeCycles(
   startStr: string,
   endStr: string,
   frequency: Frequency,
-  skipWeekends: boolean,
   skipDates: string[] = [],
 ): Cycle[] {
   const start = parse(startStr);
@@ -36,9 +35,8 @@ export function computeCycles(
   if (frequency === "daily") {
     let cur = start;
     while (cur <= end && cycles.length < MAX_CYCLES) {
-      const dow = cur.getUTCDay();
       const d = fmt(cur);
-      if (!(skipWeekends && (dow === 0 || dow === 6)) && !skipSet.has(d)) {
+      if (!skipSet.has(d)) {
         cycles.push({ start: d, end: d, due: d });
       }
       cur = addDays(cur, 1);

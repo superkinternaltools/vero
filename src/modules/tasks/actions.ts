@@ -40,7 +40,7 @@ export async function generateTasks(): Promise<{ count: number; error?: string }
   const supabase = await createClient();
   const { data: campaigns, error } = await supabase
     .from("campaigns")
-    .select("id, frequency, start_date, end_date, skip_weekends, skip_dates, campaign_stores ( store_id )")
+    .select("id, frequency, start_date, end_date, skip_dates, campaign_stores ( store_id )")
     .eq("status", "active")
     .is("deleted_at", null);
   if (error) return { count: 0, error: error.message };
@@ -55,7 +55,7 @@ export async function generateTasks(): Promise<{ count: number; error?: string }
 
   for (const c of (campaigns as any[]) ?? []) {
     if (!c.start_date || !c.end_date) continue;
-    const cycles = computeCycles(c.start_date, c.end_date, c.frequency, c.skip_weekends, c.skip_dates ?? []);
+    const cycles = computeCycles(c.start_date, c.end_date, c.frequency, c.skip_dates ?? []);
     const storeIds = (c.campaign_stores ?? []).map((x: any) => x.store_id);
     for (const store_id of storeIds)
       for (const cyc of cycles)
@@ -107,29 +107,6 @@ export async function submitProof(input: {
       if (today < (taskRow.cycle_start ?? "") || today > (taskRow.cycle_end ?? "")) {
         return { error: "The submission window for this cycle has closed. Re-submission is no longer allowed." };
       }
-    }
-  }
-
-  // Enforce submission window server-side.
-  const { data: cam } = await supabase
-    .from("campaigns")
-    .select("submission_window_start, submission_window_end")
-    .eq("id", input.campaignId)
-    .maybeSingle();
-  if (cam?.submission_window_start && cam?.submission_window_end) {
-    const istTime = new Date().toLocaleTimeString("en-GB", {
-      timeZone: "Asia/Kolkata",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    });
-    if (istTime < cam.submission_window_start || istTime >= cam.submission_window_end) {
-      const fmt = (t: string) => {
-        const [h, m] = t.split(":").map(Number);
-        const ampm = h >= 12 ? "PM" : "AM";
-        return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${ampm}`;
-      };
-      return { error: `Submissions only accepted between ${fmt(cam.submission_window_start)} and ${fmt(cam.submission_window_end)} IST.` };
     }
   }
 
@@ -264,7 +241,7 @@ export async function autoGenerateTasks(campaignId: string): Promise<void> {
   const supabase = await createClient();
   const { data: c } = await supabase
     .from("campaigns")
-    .select("id, frequency, start_date, end_date, skip_weekends, skip_dates, campaign_stores ( store_id )")
+    .select("id, frequency, start_date, end_date, skip_dates, campaign_stores ( store_id )")
     .eq("id", campaignId)
     .eq("status", "active")
     .is("deleted_at", null)
@@ -272,7 +249,7 @@ export async function autoGenerateTasks(campaignId: string): Promise<void> {
   if (!c || !(c as any).start_date || !(c as any).end_date) return;
 
   const cam = c as any;
-  const cycles = computeCycles(cam.start_date, cam.end_date, cam.frequency, cam.skip_weekends, cam.skip_dates ?? []);
+  const cycles = computeCycles(cam.start_date, cam.end_date, cam.frequency, cam.skip_dates ?? []);
   const storeIds: string[] = (cam.campaign_stores ?? []).map((x: any) => x.store_id);
   const rows = storeIds.flatMap((store_id) =>
     cycles.map((cyc) => ({

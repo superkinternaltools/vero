@@ -22,6 +22,9 @@ import {
   createExecutionType,
   renameExecutionType,
   deleteExecutionType,
+  createCampaignCategory,
+  renameCampaignCategory,
+  deleteCampaignCategory,
 } from "@/modules/org/actions";
 
 type Item = { id: string; name: string };
@@ -33,6 +36,7 @@ export function SettingsClient({
   nonSubmissionReasons,
   campaignStatuses,
   executionTypes,
+  campaignCategories,
   roles,
   granted,
 }: {
@@ -41,6 +45,7 @@ export function SettingsClient({
   nonSubmissionReasons: Item[];
   campaignStatuses: Item[];
   executionTypes: Item[];
+  campaignCategories: Item[];
   roles: RoleWithLanding[];
   granted: Record<string, string[]>;
 }) {
@@ -176,6 +181,14 @@ export function SettingsClient({
             onCreate={createExecutionType}
             onRename={renameExecutionType}
             onDelete={deleteExecutionType}
+          />
+          <ListManager
+            title="Campaign categories"
+            items={campaignCategories}
+            addPlaceholder="e.g. Compliance"
+            onCreate={createCampaignCategory}
+            onRename={renameCampaignCategory}
+            onDelete={deleteCampaignCategory}
           />
         </div>
         <p className="mt-3 text-xs text-muted-foreground">

@@ -22,3 +22,4 @@ export const listRejectionReasons = () => listNamed("rejection_reasons");
 export const listNonSubmissionReasons = () => listNamed("non_submission_reasons");
 export const listCampaignStatuses = () => listNamed("campaign_statuses");
 export const listPayoutModels = () => listNamed("payout_models");
+export const listCampaignCategories = () => listNamed("campaign_categories");

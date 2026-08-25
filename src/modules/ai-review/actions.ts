@@ -2,7 +2,14 @@
 
 import { getAccess } from "@/core/auth/access";
 import { createClient } from "@/core/db/server";
-import { runAiScoring, type AiResult } from "./engine";
+import {
+  runAiScoring,
+  generateScoringRubric,
+  generateExecutionInstructions,
+  type AiResult,
+  type RubricSku,
+  type RubricTier,
+} from "./engine";
 
 /** Runs the real AI pipeline against a sample photo using unsaved form values —
  *  so admins can test a rubric while creating/editing a campaign. */
@@ -53,5 +60,40 @@ export async function testAiPrompt(input: {
     return { result: { ...result, tierLabel } };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "AI test failed." };
+  }
+}
+
+export async function generateRubric(input: {
+  campaignName: string;
+  executionTypeName: string | null;
+  skus: RubricSku[];
+  payoutTiers?: RubricTier[];
+}): Promise<{ rubric?: string; error?: string }> {
+  const access = await getAccess();
+  if (!access?.allowed.includes("campaigns")) return { error: "Not authorized." };
+
+  try {
+    const rubric = await generateScoringRubric(input);
+    if (!rubric) return { error: "AI is not configured (missing API key) or returned an unreadable answer." };
+    return { rubric };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Rubric generation failed." };
+  }
+}
+
+export async function generateInstructions(input: {
+  campaignName: string;
+  executionTypeName: string | null;
+  skus: RubricSku[];
+}): Promise<{ instructions?: string; error?: string }> {
+  const access = await getAccess();
+  if (!access?.allowed.includes("campaigns")) return { error: "Not authorized." };
+
+  try {
+    const instructions = await generateExecutionInstructions(input);
+    if (!instructions) return { error: "AI is not configured (missing API key) or returned an unreadable answer." };
+    return { instructions };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Instructions generation failed." };
   }
 }

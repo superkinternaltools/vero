@@ -2,13 +2,14 @@
 
 import { useState, useTransition, type ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Upload, Download, Pencil, Trash2 } from "lucide-react";
+import { Plus, Upload, Download, Pencil, Trash2, AlertCircle } from "lucide-react";
 import { Button } from "@/core/ui/button";
 import { Input } from "@/core/ui/input";
 import { Modal } from "@/core/ui/modal";
 import { cn } from "@/core/lib/utils";
 import type { Store, StoreInput } from "../types";
 import { createStore, updateStore, deleteStore, bulkUploadStores } from "../actions";
+import { isStoreActive } from "../lib";
 
 type FormState = {
   code: string;
@@ -19,6 +20,9 @@ type FormState = {
   longitude: string;
   opened_at: string;
   closed_at: string;
+  partner_name: string;
+  partner_email: string;
+  partner_phone: string;
 };
 
 const EMPTY: FormState = {
@@ -30,10 +34,13 @@ const EMPTY: FormState = {
   longitude: "",
   opened_at: "",
   closed_at: "",
+  partner_name: "",
+  partner_email: "",
+  partner_phone: "",
 };
 
-function isStoreActive(s: Store, today: string): boolean {
-  return (!s.opened_at || s.opened_at <= today) && (!s.closed_at || s.closed_at >= today);
+function isMissingPartner(s: Store): boolean {
+  return s.store_type === "FOFO" && !s.partner_phone;
 }
 
 type AlignedFilter = "all" | "yes" | "no";
@@ -50,15 +57,20 @@ export function StoresClient({ stores }: { stores: Store[] }) {
   const [alignedFilter, setAlignedFilter] = useState<AlignedFilter>("all");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [activeFilter, setActiveFilter] = useState<ActiveFilter>("all");
+  const [missingPartnerOnly, setMissingPartnerOnly] = useState(false);
 
   const today = new Date().toISOString().slice(0, 10);
+  const fofoStores = stores.filter((s) => s.store_type === "FOFO");
+  const missingPartnerCount = fofoStores.filter(isMissingPartner).length;
   const filteredStores = stores.filter((s) => {
     if (alignedFilter !== "all" && s.aligned !== (alignedFilter === "yes")) return false;
     if (typeFilter !== "all" && s.store_type !== typeFilter) return false;
     if (activeFilter !== "all" && isStoreActive(s, today) !== (activeFilter === "active")) return false;
+    if (missingPartnerOnly && !isMissingPartner(s)) return false;
     return true;
   });
-  const filtersApplied = alignedFilter !== "all" || typeFilter !== "all" || activeFilter !== "all";
+  const filtersApplied =
+    alignedFilter !== "all" || typeFilter !== "all" || activeFilter !== "all" || missingPartnerOnly;
 
   function openAdd() {
     setEditing(null);
@@ -78,12 +90,16 @@ export function StoresClient({ stores }: { stores: Store[] }) {
       longitude: s.longitude?.toString() ?? "",
       opened_at: s.opened_at ?? "",
       closed_at: s.closed_at ?? "",
+      partner_name: s.partner_name ?? "",
+      partner_email: s.partner_email ?? "",
+      partner_phone: s.partner_phone ?? "",
     });
     setError(null);
     setOpen(true);
   }
 
   function submit() {
+    const isFofo = form.store_type === "FOFO";
     const payload: StoreInput = {
       code: form.code.trim(),
       name: form.name.trim(),
@@ -93,6 +109,11 @@ export function StoresClient({ stores }: { stores: Store[] }) {
       longitude: form.longitude ? Number(form.longitude) : null,
       opened_at: form.opened_at || null,
       closed_at: form.closed_at || null,
+      // Partner contact is FOFO-only — clear it if the type is changed away,
+      // so a store never carries a stale partner from before it flipped.
+      partner_name: isFofo ? form.partner_name.trim() || null : null,
+      partner_email: isFofo ? form.partner_email.trim() || null : null,
+      partner_phone: isFofo ? form.partner_phone.trim() || null : null,
     };
     if (!payload.code || !payload.name) {
       setError("Code and name are required.");
@@ -247,6 +268,17 @@ export function StoresClient({ stores }: { stores: Store[] }) {
             <option value="closed">Closed</option>
           </select>
         </div>
+        {missingPartnerCount > 0 && (
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={missingPartnerOnly}
+              onChange={(e) => setMissingPartnerOnly(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-border accent-[var(--primary)]"
+            />
+            {missingPartnerCount} FOFO store{missingPartnerCount === 1 ? "" : "s"} missing a partner
+          </label>
+        )}
         {filtersApplied && (
           <button
             type="button"
@@ -254,6 +286,7 @@ export function StoresClient({ stores }: { stores: Store[] }) {
               setAlignedFilter("all");
               setTypeFilter("all");
               setActiveFilter("all");
+              setMissingPartnerOnly(false);
             }}
             className="text-xs font-medium text-primary hover:underline"
           >
@@ -270,6 +303,7 @@ export function StoresClient({ stores }: { stores: Store[] }) {
               <th className="px-4 py-3 font-semibold">Name</th>
               <th className="px-4 py-3 font-semibold">Aligned</th>
               <th className="px-4 py-3 font-semibold">Type</th>
+              <th className="px-4 py-3 font-semibold">Partner</th>
               <th className="px-4 py-3 font-semibold">Score</th>
               <th className="px-4 py-3 font-semibold">Active</th>
               <th className="px-4 py-3 text-right font-semibold">Actions</th>
@@ -293,6 +327,21 @@ export function StoresClient({ stores }: { stores: Store[] }) {
                   </span>
                 </td>
                 <td className="px-4 py-3 text-muted-foreground">{s.store_type ?? "—"}</td>
+                <td className="px-4 py-3">
+                  {s.store_type !== "FOFO" ? (
+                    <span className="text-muted-foreground">—</span>
+                  ) : isMissingPartner(s) ? (
+                    <span className="inline-flex items-center gap-1 text-xs font-medium text-danger">
+                      <AlertCircle className="h-3.5 w-3.5" />
+                      No partner assigned
+                    </span>
+                  ) : (
+                    <div className="text-foreground">
+                      <div>{s.partner_name || "—"}</div>
+                      <div className="text-xs text-muted-foreground">{s.partner_phone}</div>
+                    </div>
+                  )}
+                </td>
                 <td className="px-4 py-3 text-muted-foreground">
                   {s.score ?? "Unrated"}
                 </td>
@@ -330,7 +379,7 @@ export function StoresClient({ stores }: { stores: Store[] }) {
             ))}
             {filteredStores.length === 0 && (
               <tr>
-                <td colSpan={7} className="p-10 text-center text-sm text-muted-foreground">
+                <td colSpan={8} className="p-10 text-center text-sm text-muted-foreground">
                   {stores.length === 0 ? "No stores yet. Add one, or bulk-upload a CSV." : "No stores match these filters."}
                 </td>
               </tr>
@@ -425,6 +474,44 @@ export function StoresClient({ stores }: { stores: Store[] }) {
               <p className="text-[11px] text-muted-foreground">Leave blank if still active.</p>
             </div>
           </div>
+
+          {form.store_type === "FOFO" && (
+            <div className="space-y-3 border-t border-border pt-4">
+              <div>
+                <p className="text-sm font-medium text-foreground">Store Partner contact</p>
+                <p className="text-[11px] text-muted-foreground">
+                  For reaching the partner directly — e.g. over WhatsApp. No login required, and
+                  separate from any Vero account they may already have.
+                </p>
+              </div>
+              <div className="space-y-1.5">
+                <label className={field}>Partner name</label>
+                <Input
+                  value={form.partner_name}
+                  onChange={(e) => setForm({ ...form, partner_name: e.target.value })}
+                  placeholder="e.g. Rekha Naidu"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className={field}>Phone / WhatsApp number</label>
+                  <Input
+                    value={form.partner_phone}
+                    onChange={(e) => setForm({ ...form, partner_phone: e.target.value })}
+                    placeholder="+91 98765 43210"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className={field}>Email</label>
+                  <Input
+                    value={form.partner_email}
+                    onChange={(e) => setForm({ ...form, partner_email: e.target.value })}
+                    placeholder="partner@example.com"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
           {error && <p className="text-sm font-medium text-danger">{error}</p>}
 
