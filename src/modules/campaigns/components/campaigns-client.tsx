@@ -3,12 +3,12 @@
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Plus, Pencil, Trash2, Copy, X, Search } from "lucide-react";
+import { Plus, Pencil, Trash2, Copy, X, Search, Sparkles } from "lucide-react";
 import { Button } from "@/core/ui/button";
 import { MultiSelect } from "@/core/ui/multi-select";
 import { GenerateTasksButton } from "./generate-tasks-button";
 import { cn } from "@/core/lib/utils";
-import { duplicateCampaign, deleteCampaign, bulkSetCampaignStatus, bulkSetCampaignCategory } from "../actions";
+import { duplicateCampaign, deleteCampaign, bulkSetCampaignStatus, bulkSetCampaignCategory, bulkSetCampaignBrand } from "../actions";
 import type { CampaignListRow, CampaignStatus, Frequency } from "../types";
 
 const FREQ: Record<Frequency, string> = { daily: "Daily", weekly: "Weekly", monthly: "Monthly" };
@@ -25,10 +25,12 @@ export function CampaignsClient({
   campaigns,
   statuses,
   categories,
+  brands,
 }: {
   campaigns: CampaignListRow[];
   statuses: { id: string; name: string }[];
   categories: { id: string; name: string }[];
+  brands: { id: string; name: string }[];
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -36,6 +38,7 @@ export function CampaignsClient({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkStatus, setBulkStatus] = useState("");
   const [bulkCategory, setBulkCategory] = useState("");
+  const [bulkBrand, setBulkBrand] = useState("");
   const [bulkError, setBulkError] = useState<string | null>(null);
 
   // ── Filters ──────────────────────────────────────────────────────────────
@@ -45,6 +48,7 @@ export function CampaignsClient({
   const [filterExecTypes, setFilterExecTypes] = useState<string[]>([]);
   const [filterFrequencies, setFilterFrequencies] = useState<string[]>([]);
   const [filterCategories, setFilterCategories] = useState<string[]>([]);
+  const [filterBrands, setFilterBrands] = useState<string[]>([]);
 
   const deptOptions = useMemo(() => {
     const names = new Set<string>();
@@ -64,7 +68,8 @@ export function CampaignsClient({
     filterDepts.length > 0 ||
     filterExecTypes.length > 0 ||
     filterFrequencies.length > 0 ||
-    filterCategories.length > 0;
+    filterCategories.length > 0 ||
+    filterBrands.length > 0;
 
   const visibleCampaigns = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -75,9 +80,10 @@ export function CampaignsClient({
       if (filterExecTypes.length && (!c.executionTypeName || !filterExecTypes.includes(c.executionTypeName))) return false;
       if (filterDepts.length && !c.departmentNames.some((d) => filterDepts.includes(d))) return false;
       if (filterCategories.length && (!c.categoryName || !filterCategories.includes(c.categoryName))) return false;
+      if (filterBrands.length && (!c.brandName || !filterBrands.includes(c.brandName))) return false;
       return true;
     });
-  }, [campaigns, search, filterStatuses, filterFrequencies, filterExecTypes, filterDepts, filterCategories]);
+  }, [campaigns, search, filterStatuses, filterFrequencies, filterExecTypes, filterDepts, filterCategories, filterBrands]);
 
   function clearFilters() {
     setSearch("");
@@ -86,6 +92,7 @@ export function CampaignsClient({
     setFilterExecTypes([]);
     setFilterFrequencies([]);
     setFilterCategories([]);
+    setFilterBrands([]);
   }
 
   function toggleSelect(id: string) {
@@ -105,6 +112,7 @@ export function CampaignsClient({
     setSelectedIds(new Set());
     setBulkStatus("");
     setBulkCategory("");
+    setBulkBrand("");
     setBulkError(null);
   }
 
@@ -130,6 +138,17 @@ export function CampaignsClient({
     });
   }
 
+  function applyBulkBrand() {
+    if (!bulkBrand) return;
+    setBulkError(null);
+    start(async () => {
+      const res = await bulkSetCampaignBrand(Array.from(selectedIds), bulkBrand);
+      if (res.error) setBulkError(res.error);
+      clearSelection();
+      router.refresh();
+    });
+  }
+
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -142,6 +161,12 @@ export function CampaignsClient({
         </div>
         <div className="flex gap-2">
           <GenerateTasksButton />
+          <Link href="/campaigns/bot">
+            <Button variant="outline" size="md">
+              <Sparkles className="h-4 w-4" />
+              Create with AI
+            </Button>
+          </Link>
           <Link href="/campaigns/new">
             <Button size="md">
               <Plus className="h-4 w-4" />
@@ -151,7 +176,7 @@ export function CampaignsClient({
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-1 gap-3 rounded-2xl border border-border bg-card p-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      <div className="mt-4 grid grid-cols-1 gap-3 rounded-2xl border border-border bg-card p-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7">
         <div className="relative">
           <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">Search</label>
           <Search className="absolute left-3 top-[calc(50%+8px)] h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -207,8 +232,17 @@ export function CampaignsClient({
             placeholder="All categories"
           />
         </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">Brand</label>
+          <MultiSelect
+            options={brands.map((b) => ({ id: b.name, label: b.name }))}
+            selected={filterBrands}
+            onChange={setFilterBrands}
+            placeholder="All brands"
+          />
+        </div>
         {isFiltered && (
-          <div className="flex items-end xl:col-span-6">
+          <div className="flex items-end xl:col-span-7">
             <button
               type="button"
               onClick={clearFilters}
@@ -258,6 +292,11 @@ export function CampaignsClient({
                   {c.categoryName && (
                     <span className="ml-2 inline-flex rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary">
                       {c.categoryName}
+                    </span>
+                  )}
+                  {c.brandName && (
+                    <span className="ml-1.5 inline-flex rounded-full bg-info/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-info">
+                      {c.brandName}
                     </span>
                   )}
                 </td>
@@ -366,6 +405,24 @@ export function CampaignsClient({
               </select>
               {bulkCategory && (
                 <Button size="md" onClick={applyBulkCategory} disabled={pending}>
+                  Apply
+                </Button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <select
+                value={bulkBrand}
+                onChange={(e) => setBulkBrand(e.target.value)}
+                className="h-10 rounded-xl border border-border bg-input px-3 text-sm text-foreground focus:border-primary focus:outline-none"
+              >
+                <option value="">Set brand…</option>
+                {brands.map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+              {bulkBrand && (
+                <Button size="md" onClick={applyBulkBrand} disabled={pending}>
                   Apply
                 </Button>
               )}

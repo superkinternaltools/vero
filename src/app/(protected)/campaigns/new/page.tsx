@@ -5,6 +5,7 @@ import {
   listJobTitles,
   listCampaignStatuses,
   listCampaignCategories,
+  listBrands,
 } from "@/modules/org/queries";
 import { listStores } from "@/modules/stores/queries";
 import { isStoreActive } from "@/modules/stores/lib";
@@ -13,7 +14,7 @@ import { EMPTY_CAMPAIGN } from "@/modules/campaigns/types";
 
 export default async function NewCampaignPage() {
   await requireAccess("campaigns");
-  const [executionTypes, departments, jobTitles, stores, statuses, categories] =
+  const [executionTypes, departments, jobTitles, stores, statuses, categories, brands] =
     await Promise.all([
       listExecutionTypes(),
       listDepartments(),
@@ -21,6 +22,7 @@ export default async function NewCampaignPage() {
       listStores(),
       listCampaignStatuses(),
       listCampaignCategories(),
+      listBrands(),
     ]);
 
   const today = new Date().toISOString().slice(0, 10);
@@ -40,6 +42,7 @@ export default async function NewCampaignPage() {
       }))}
       statuses={statuses}
       categories={categories}
+      brands={brands}
     />
   );
 }

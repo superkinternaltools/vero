@@ -242,6 +242,25 @@ export type ContestMonthReport = {
    * fixed number when groups can change week to week, so this is shown
    * instead of a single month-level count. */
   weeklyGroupCounts: WeeklyGroupCounts[];
+  /** Whether this campaign resolves to a brand (campaigns.brand_id) with
+   * Vero-synced execution history — gates whether the baseline panel shows
+   * at all, distinct from brandBaseline being null because no baseline
+   * data was actually found. */
+  hasBrand: boolean;
+  /** A brand's pre-campaign baseline: the raw (ungrouped — no campaign was
+   * running yet) aggregate for the campaign's own target stores in the
+   * month right before its current unbroken run started. Additive to the
+   * existing lastMonth/lastYear comparison, not a replacement — null when
+   * hasBrand is false, or no baseline could be found within the fallback
+   * window. See getSmartBaseline() in queries.ts. */
+  brandBaseline: {
+    month: string;
+    usedFallback: boolean;
+    gmv: number | null;
+    inStoreValue: number | null;
+    sellThrough: number | null;
+    storeCount: number;
+  } | null;
 };
 
 /** Returned instead of a report when this campaign/month has Status values

@@ -144,6 +144,7 @@ export function CampaignForm({
   stores,
   statuses,
   categories,
+  brands,
 }: {
   mode: "create" | "edit";
   campaignId?: string;
@@ -153,11 +154,13 @@ export function CampaignForm({
   jobTitles: Opt[];
   stores: StoreOpt[];
   statuses: Opt[];
-  categories: Opt[];
+  categories: (Opt & { is_brand_category: boolean })[];
+  brands: Opt[];
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [v, setV] = useState<CampaignFormValues>(initial);
+  const isBrandCategory = !!categories.find((c) => c.id === v.category_id)?.is_brand_category;
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
 
@@ -360,22 +363,47 @@ export function CampaignForm({
             </select>
           </div>
         </div>
-        <div className="space-y-1.5">
-          <label className={labelClass}>Category</label>
-          <select
-            className={selectClass}
-            value={v.category_id ?? ""}
-            onChange={(e) => set("category_id", e.target.value || null)}
-          >
-            <option value="">—</option>
-            {categories.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
-          <p className="text-xs text-muted-foreground">
-            e.g. Brand Visibility for Tide, Ariel, Surf Excel — lets you list the SKUs it&apos;s tracking below.
-            Add more categories in Settings.
-          </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <label className={labelClass}>Category</label>
+            <select
+              className={selectClass}
+              value={v.category_id ?? ""}
+              onChange={(e) => {
+                const newCategoryId = e.target.value || null;
+                const stillBrandCategory = categories.find((c) => c.id === newCategoryId)?.is_brand_category;
+                setV((p) => ({ ...p, category_id: newCategoryId, brand_id: stillBrandCategory ? p.brand_id : null }));
+              }}
+            >
+              <option value="">—</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              e.g. Brand Visibility for Tide, Ariel, Surf Excel — lets you list the SKUs it&apos;s tracking below.
+              Add more categories in Settings.
+            </p>
+          </div>
+          {isBrandCategory && (
+            <div className="space-y-1.5">
+              <label className={labelClass}>Brand</label>
+              <select
+                className={selectClass}
+                value={v.brand_id ?? ""}
+                onChange={(e) => set("brand_id", e.target.value || null)}
+              >
+                <option value="">—</option>
+                {brands.map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                Clubs this with the brand&apos;s other monthly campaigns (e.g. Tide - July, Tide - August).
+                Add more brands in Settings.
+              </p>
+            </div>
+          )}
         </div>
       </Section>
 

@@ -11,6 +11,7 @@ export async function listCampaigns(): Promise<CampaignListRow[]> {
       id, name, frequency, status, payout_enabled, payout_amount,
       execution_types ( name ),
       campaign_categories ( name ),
+      brands ( name ),
       campaign_departments ( departments ( name ) ),
       campaign_stores ( store_id )
       `,
@@ -31,7 +32,30 @@ export async function listCampaigns(): Promise<CampaignListRow[]> {
       .filter(Boolean),
     storeCount: (row.campaign_stores ?? []).length,
     categoryName: row.campaign_categories?.name ?? null,
+    brandName: row.brands?.name ?? null,
   }));
+}
+
+export type BrandCampaignSummary = {
+  id: string;
+  name: string;
+  start_date: string | null;
+  end_date: string | null;
+  status: string;
+};
+
+/** A brand's full campaign history — used by the campaign-creation bot to
+ * find something to clone, and later by Contest Impact's smart-baseline
+ * streak walk. */
+export async function listCampaignsByBrand(brandId: string): Promise<BrandCampaignSummary[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("campaigns")
+    .select("id, name, start_date, end_date, status")
+    .eq("brand_id", brandId)
+    .is("deleted_at", null)
+    .order("start_date", { ascending: false });
+  return (data as BrandCampaignSummary[]) ?? [];
 }
 
 export async function getCampaign(
@@ -81,5 +105,6 @@ export async function getCampaign(
     skip_dates: row.skip_dates ?? [],
     category_id: row.category_id,
     skus: row.skus ?? [],
+    brand_id: row.brand_id,
   };
 }

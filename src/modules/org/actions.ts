@@ -135,6 +135,21 @@ export async function deleteCampaignCategory(id: string): Promise<Result> {
   return {};
 }
 
+/* ---- Brands ---- */
+export async function createBrand(name: string): Promise<Result> {
+  return createReason("brands", name.trim());
+}
+export async function renameBrand(id: string, name: string): Promise<Result> {
+  return renameReason("brands", id, name.trim());
+}
+export async function deleteBrand(id: string): Promise<Result> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("brands").delete().eq("id", id);
+  if (error) return { error: error.message };
+  revalidatePath("/settings");
+  return {};
+}
+
 /* ---- Generic reason-list helpers (rejection + non-submission) ---- */
 async function createReason(table: string, name: string): Promise<Result> {
   if (!name.trim()) return { error: "Name is required." };

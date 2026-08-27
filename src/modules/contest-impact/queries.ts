@@ -704,13 +704,133 @@ export async function getContestMonthReport(campaignKey: string, month: string):
     storeNames: approvedYearStores.map((s) => s.storeName),
   };
 
-  return { verdict, metrics, stores, stock, lastYear, weeklyGroupCounts };
+  const { hasBrand, brandBaseline } = await getSmartBaseline(campaignKey, month);
+
+  return { verdict, metrics, stores, stock, lastYear, weeklyGroupCounts, hasBrand, brandBaseline };
 }
 
 function previousMonthKey(month: string): string {
   const [y, m] = month.split("-").map(Number);
   const d = new Date(Date.UTC(y, m - 2, 1));
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+// ==================== brand baseline (smart "last month") ====================
+// A brand's monthly campaigns ("Tide - August", "Tide - July"...) are each
+// a fully independent Vero campaign with no shared identity of their own —
+// the only link is campaigns.brand_id. contest_campaign_rows carries
+// campaign_id (via the Vero-sync path), so we can join through that to find
+// a brand's real execution history without any separate mapping table.
+
+async function resolveCampaignAndBrand(campaignKey: string, month: string): Promise<{ campaignId: string; brandId: string } | null> {
+  const supabase = await createClient();
+  const monthDate = `${month}-01`;
+  const { data } = await supabase
+    .from("contest_campaign_rows")
+    .select("campaign_id, raw_campaign_name")
+    .eq("month", monthDate)
+    .not("campaign_id", "is", null);
+  const row = ((data as any[]) ?? []).find((r) => normalizeName(r.raw_campaign_name) === campaignKey);
+  if (!row) return null;
+  const { data: campaign } = await supabase.from("campaigns").select("brand_id").eq("id", row.campaign_id).maybeSingle();
+  const brandId = (campaign as any)?.brand_id;
+  if (!brandId) return null;
+  return { campaignId: row.campaign_id, brandId };
+}
+
+/** Every calendar month (YYYY-MM) this brand has ≥1 contest_campaign_rows
+ * row with a campaign_id under it — i.e. actually-synced execution data.
+ * Sorted ascending. Only sees Vero-synced rows (campaign_id not null); any
+ * CSV-only historical months for a brand, pre-dating the Vero sync, won't
+ * be visible here and could look like a false gap — a non-issue today
+ * since all current contest data comes via the Vero-sync path. */
+async function getBrandActiveMonths(brandId: string): Promise<string[]> {
+  const supabase = await createClient();
+  const { data: brandCampaigns } = await supabase.from("campaigns").select("id").eq("brand_id", brandId);
+  const campaignIds = ((brandCampaigns as any[]) ?? []).map((c) => c.id);
+  if (!campaignIds.length) return [];
+  const { data: rows } = await supabase.from("contest_campaign_rows").select("month").in("campaign_id", campaignIds);
+  const months = new Set(((rows as any[]) ?? []).map((r) => (r.month as string).slice(0, 7)));
+  return [...months].sort();
+}
+
+/** Walks backward from `month` through consecutive active months for this
+ * brand. Returns the month immediately BEFORE the unbroken streak
+ * containing `month` — the baseline candidate. Null if `month` itself
+ * isn't active, or the brand has no active-month data at all. If the brand
+ * has never had a gap, this walks all the way back to before it first ever
+ * ran — that's intentional, not a bug to special-case. */
+function findBaselineMonth(activeMonths: string[], month: string): string | null {
+  const active = new Set(activeMonths);
+  if (!active.has(month)) return null;
+  let cursor = month;
+  while (active.has(previousMonthKey(cursor))) cursor = previousMonthKey(cursor);
+  return previousMonthKey(cursor);
+}
+
+/** Raw, ungrouped aggregate for a set of stores in one month — used only
+ * for a pre-campaign baseline, where there's no approved/poor/control
+ * split because no campaign existed yet. Deliberately does NOT filter by
+ * raw_campaign_name — the premise is "what these stores looked like before
+ * this brand's tracked campaign existed under any name."
+ *
+ * Known limitation: contest_sell_side_rows is technically scoped per
+ * uploaded campaign sheet (every row carries its own raw_campaign_name), so
+ * if a store has a sell-side row for this month that was uploaded under an
+ * unrelated campaign/category, it gets picked up here too. Acceptable for
+ * a baseline explicitly framed as "before this brand ran" — not filtering
+ * by name is the whole point — but worth knowing if a baseline number ever
+ * looks surprising. */
+async function getRawStoreAggregateForMonth(
+  storeIds: string[],
+  month: string,
+): Promise<{ gmv: number | null; inStoreValue: number | null; sellThrough: number | null; storeCount: number } | null> {
+  if (!storeIds.length) return null;
+  const supabase = await createClient();
+  const monthDate = `${month}-01`;
+  const { data } = await supabase
+    .from("contest_sell_side_rows")
+    .select("store_id, this_month_gmv, this_month_in_store_value")
+    .eq("month", monthDate)
+    .in("store_id", storeIds);
+  const usable = ((data as any[]) ?? []).filter((r) => r.this_month_gmv != null);
+  if (!usable.length) return null;
+  const gmv = aggregate(usable.map((r) => r.this_month_gmv));
+  const inStoreValue = aggregate(usable.map((r) => r.this_month_in_store_value).filter((v: number | null): v is number => v != null));
+  const sellThrough = gmv != null && inStoreValue ? (gmv / inStoreValue) * 100 : null;
+  return { gmv, inStoreValue, sellThrough, storeCount: new Set(usable.map((r) => r.store_id)).size };
+}
+
+/** Top-level entry: baseline month + a capped fallback walk (24 further
+ * months) to the oldest data actually available, if the exact candidate
+ * month has none. Never throws — hasBrand is false when this campaign
+ * doesn't resolve to a brand at all (gates whether the UI shows the panel
+ * at all); brandBaseline is null when hasBrand is true but nothing was
+ * found within the cap (UI shows "no historical baseline available" rather
+ * than a misleading number, instead of hiding the panel). */
+async function getSmartBaseline(
+  campaignKey: string,
+  month: string,
+): Promise<{ hasBrand: boolean; brandBaseline: ContestMonthReport["brandBaseline"] }> {
+  const resolved = await resolveCampaignAndBrand(campaignKey, month);
+  if (!resolved) return { hasBrand: false, brandBaseline: null };
+
+  const supabase = await createClient();
+  const { data: storeRows } = await supabase.from("campaign_stores").select("store_id").eq("campaign_id", resolved.campaignId);
+  const campaignStoreIds = ((storeRows as any[]) ?? []).map((r) => r.store_id);
+  if (!campaignStoreIds.length) return { hasBrand: true, brandBaseline: null };
+
+  const activeMonths = await getBrandActiveMonths(resolved.brandId);
+  const candidate = findBaselineMonth(activeMonths, month);
+  if (!candidate) return { hasBrand: true, brandBaseline: null };
+
+  let probe = candidate;
+  for (let i = 0; i < 25; i++) {
+    const result = await getRawStoreAggregateForMonth(campaignStoreIds, probe);
+    if (result) return { hasBrand: true, brandBaseline: { month: probe, usedFallback: i > 0, ...result } };
+    probe = previousMonthKey(probe);
+  }
+  return { hasBrand: true, brandBaseline: null };
 }
 
 export type ContestReport = { diagnosis: ContestDiagnosis; narrative: ContestReportNarrative };

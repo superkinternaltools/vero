@@ -25,6 +25,9 @@ import {
   createCampaignCategory,
   renameCampaignCategory,
   deleteCampaignCategory,
+  createBrand,
+  renameBrand,
+  deleteBrand,
 } from "@/modules/org/actions";
 
 type Item = { id: string; name: string };
@@ -37,6 +40,7 @@ export function SettingsClient({
   campaignStatuses,
   executionTypes,
   campaignCategories,
+  brands,
   roles,
   granted,
 }: {
@@ -46,6 +50,7 @@ export function SettingsClient({
   campaignStatuses: Item[];
   executionTypes: Item[];
   campaignCategories: Item[];
+  brands: Item[];
   roles: RoleWithLanding[];
   granted: Record<string, string[]>;
 }) {
@@ -189,6 +194,14 @@ export function SettingsClient({
             onCreate={createCampaignCategory}
             onRename={renameCampaignCategory}
             onDelete={deleteCampaignCategory}
+          />
+          <ListManager
+            title="Brands"
+            items={brands}
+            addPlaceholder="e.g. Tide"
+            onCreate={createBrand}
+            onRename={renameBrand}
+            onDelete={deleteBrand}
           />
         </div>
         <p className="mt-3 text-xs text-muted-foreground">

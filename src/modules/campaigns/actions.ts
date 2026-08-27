@@ -32,6 +32,7 @@ function scalars(v: CampaignFormValues) {
     skip_dates: v.skip_dates,
     category_id: v.category_id,
     skus: v.category_id ? v.skus : [],
+    brand_id: v.brand_id,
   };
 }
 
@@ -142,6 +143,20 @@ export async function bulkSetCampaignCategory(
   return {};
 }
 
+/** Brand-only bulk update — for retroactively clubbing existing campaigns
+ * (e.g. all past Tide - June/July/August rows) under one brand bucket. */
+export async function bulkSetCampaignBrand(
+  ids: string[],
+  brandId: string | null,
+): Promise<Result> {
+  if (!ids.length) return {};
+  const supabase = await createClient();
+  const { error } = await supabase.from("campaigns").update({ brand_id: brandId }).in("id", ids);
+  if (error) return { error: error.message };
+  revalidatePath("/campaigns");
+  return {};
+}
+
 export async function duplicateCampaign(formData: FormData): Promise<void> {
   const { redirect } = await import("next/navigation");
   const id = String(formData.get("id"));
@@ -188,6 +203,7 @@ export async function duplicateCampaign(formData: FormData): Promise<void> {
       skip_dates: s.skip_dates ?? [],
       category_id: s.category_id ?? null,
       skus: s.skus ?? [],
+      brand_id: s.brand_id ?? null,
     })
     .select("id")
     .single();

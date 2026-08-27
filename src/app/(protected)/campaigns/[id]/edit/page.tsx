@@ -6,6 +6,7 @@ import {
   listJobTitles,
   listCampaignStatuses,
   listCampaignCategories,
+  listBrands,
 } from "@/modules/org/queries";
 import { listStores } from "@/modules/stores/queries";
 import { isStoreActive } from "@/modules/stores/lib";
@@ -20,7 +21,7 @@ export default async function EditCampaignPage({
   await requireAccess("campaigns");
   const { id } = await params;
 
-  const [campaign, executionTypes, departments, jobTitles, stores, statuses, categories] =
+  const [campaign, executionTypes, departments, jobTitles, stores, statuses, categories, brands] =
     await Promise.all([
       getCampaign(id),
       listExecutionTypes(),
@@ -29,6 +30,7 @@ export default async function EditCampaignPage({
       listStores(),
       listCampaignStatuses(),
       listCampaignCategories(),
+      listBrands(),
     ]);
   if (!campaign) notFound();
 
@@ -51,6 +53,7 @@ export default async function EditCampaignPage({
       }))}
       statuses={statuses}
       categories={categories}
+      brands={brands}
     />
   );
 }

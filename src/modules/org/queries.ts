@@ -22,4 +22,15 @@ export const listRejectionReasons = () => listNamed("rejection_reasons");
 export const listNonSubmissionReasons = () => listNamed("non_submission_reasons");
 export const listCampaignStatuses = () => listNamed("campaign_statuses");
 export const listPayoutModels = () => listNamed("payout_models");
-export const listCampaignCategories = () => listNamed("campaign_categories");
+
+export type CategoryOption = Option & { is_brand_category: boolean };
+export async function listCampaignCategories(): Promise<CategoryOption[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("campaign_categories")
+    .select("id, name, is_brand_category")
+    .order("name");
+  return (data as CategoryOption[]) ?? [];
+}
+
+export const listBrands = () => listNamed("brands");

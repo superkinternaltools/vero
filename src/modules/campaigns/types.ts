@@ -43,6 +43,10 @@ export type CampaignFormValues = {
   skip_dates: string[];
   category_id: string | null;
   skus: CampaignSku[];
+  /** Buckets monthly repeats of the same brand ("Tide - August", "Tide -
+   * July"...) together — lets Contest Impact and the campaign bot find a
+   * brand's full campaign history. */
+  brand_id: string | null;
 };
 
 export type CampaignListRow = {
@@ -56,7 +60,13 @@ export type CampaignListRow = {
   departmentNames: string[];
   storeCount: number;
   categoryName: string | null;
+  brandName: string | null;
 };
+
+/** What the campaign-creation bot deals in — everything a real campaign
+ * needs except reference_images (the bot never has photos to offer; those
+ * can be added by hand after creation if wanted). */
+export type DraftCampaignInput = Omit<CampaignFormValues, "reference_images">;
 
 export const EMPTY_CAMPAIGN: CampaignFormValues = {
   name: "",
@@ -85,4 +95,5 @@ export const EMPTY_CAMPAIGN: CampaignFormValues = {
   skip_dates: [],
   category_id: null,
   skus: [],
+  brand_id: null,
 };

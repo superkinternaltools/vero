@@ -500,10 +500,64 @@ function InventorySummarySection({ report }: { report: ContestMonthReport }) {
 type View = "summary" | "metrics" | "stores" | "execution";
 const VIEW_LABELS: Record<View, string> = { summary: "Summary", metrics: "Detailed metrics", stores: "Store performance", execution: "Is it working?" };
 
+/** Additive to the lastMonth/lastYear toggle elsewhere — not a replacement.
+ * A brand's baseline is the campaign's own target stores' raw performance
+ * (no approved/poor split — no campaign was running yet) from the month
+ * right before its current unbroken run started, compared against those
+ * same stores' approved-group performance now. Only rendered when the
+ * campaign resolves to a brand at all (report.hasBrand); shows an empty
+ * state rather than hiding entirely when no baseline data was found yet. */
+function BrandBaselineCard({ report }: { report: ContestMonthReport }) {
+  if (!report.hasBrand) return null;
+
+  const gmvNow = report.metrics.find((m) => m.key === "gmv")?.monthAvg.approved ?? null;
+  const sellThroughNow = report.metrics.find((m) => m.key === "sellThrough")?.monthAvg.approved ?? null;
+  const b = report.brandBaseline;
+
+  return (
+    <div className="rounded-2xl border border-border bg-card p-5">
+      <h3 className="text-sm font-semibold text-foreground">Brand baseline</h3>
+      <p className="mb-3 mt-1 text-xs text-muted-foreground">
+        {b
+          ? `These stores before this brand's current run started — ${fmtMonthName(b.month)}${b.usedFallback ? " (nearest data available)" : ""}.`
+          : "What these stores looked like before this brand's current run started."}
+      </p>
+
+      {!b ? (
+        <p className="rounded-xl border border-dashed border-border p-4 text-center text-xs text-muted-foreground">
+          No historical baseline available for these stores yet.
+        </p>
+      ) : (
+        <div className="grid grid-cols-3 gap-3">
+          <BaselineStat label="GMV" baseline={fmtHard(b.gmv, "currency")} now={fmtHard(gmvNow, "currency")} sub={`${b.storeCount} stores`} />
+          <BaselineStat label="Sell-through" baseline={fmtHard(b.sellThrough, "percent")} now={fmtHard(sellThroughNow, "percent")} />
+          <BaselineStat label="In-store value" baseline={fmtHard(b.inStoreValue, "currency")} now="—" sub="baseline only" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BaselineStat({ label, baseline, now, sub }: { label: string; baseline: string; now: string; sub?: string }) {
+  return (
+    <div className="rounded-xl bg-input p-3">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="mt-1 text-xs text-muted-foreground">Before: <span className="font-medium text-foreground">{baseline}</span></p>
+      <p className="text-xs text-muted-foreground">Now (approved): <span className="font-medium text-foreground">{now}</span></p>
+      {sub && <p className="mt-0.5 text-[10px] text-muted-foreground">{sub}</p>}
+    </div>
+  );
+}
+
+function fmtMonthName(month: string): string {
+  return new Date(`${month}-01T00:00:00Z`).toLocaleDateString("en-IN", { month: "long", year: "numeric", timeZone: "UTC" });
+}
+
 function SummaryView({ report, onNavigateToStores }: { report: ContestMonthReport; onNavigateToStores: () => void }) {
   return (
     <div className="space-y-4">
       <InventorySummarySection report={report} />
+      <BrandBaselineCard report={report} />
       <ExecutionGroupsCard report={report} onNavigateToStores={onNavigateToStores} />
     </div>
   );
