@@ -62,9 +62,8 @@ async function toolGetPastCampaign(brandName: string, monthLabel: string) {
 
   const full = await getCampaign(matches[0].id);
   if (!full) return { error: "That campaign could not be loaded." };
-  const { id, reference_images, ...draft } = full;
+  const { id, ...draft } = full;
   void id;
-  void reference_images;
   return { source: matches[0], draft };
 }
 
@@ -84,9 +83,8 @@ async function toolFindCampaignByName(query: string) {
 async function toolCloneCampaignById(campaignId: string) {
   const full = await getCampaign(campaignId);
   if (!full) return { error: "That campaign could not be loaded — check the id came from find_campaign_by_name or list_brand_campaign_history." };
-  const { id, reference_images, ...draft } = full;
+  const { id, ...draft } = full;
   void id;
-  void reference_images;
   return { source: { id: full.id, name: full.name }, draft };
 }
 
@@ -194,6 +192,11 @@ const TOOLS: ChatCompletionTool[] = [
                     },
                   },
                 },
+                reference_images: {
+                  type: "array",
+                  items: { type: "string" },
+                  description: "Only when cloning — copy this array VERBATIM from get_past_campaign/clone_campaign_by_id's result. Never invent a URL for a new campaign; leave empty instead.",
+                },
               },
               required: ["name"],
             },
@@ -290,6 +293,13 @@ function normalizeDraft(raw: any): DraftCampaignInput {
     category_id: typeof raw?.category_id === "string" ? raw.category_id : null,
     skus: Array.isArray(raw?.skus) ? raw.skus.map(normalizeSku) : [],
     brand_id: typeof raw?.brand_id === "string" ? raw.brand_id : null,
+    // Only accept real-looking URLs — guards against the model inventing a
+    // plausible-but-fake one for a "new" campaign despite the instruction
+    // not to; reference_images has no FK constraint to catch that at the DB
+    // layer the way execution_type_id etc. do.
+    reference_images: Array.isArray(raw?.reference_images)
+      ? raw.reference_images.filter((x: any) => typeof x === "string" && /^https?:\/\//.test(x))
+      : [],
   };
 }
 
@@ -308,8 +318,9 @@ WORKFLOW:
 2. To build a new campaign: gather what's needed through conversation (name/brand, execution type, frequency, dates, targeting, payout, SKUs if it's a Brand Visibility campaign) — look up valid ids via list_execution_types/list_departments/list_job_titles/list_categories/list_payout_models/list_stores rather than inventing them. Reasonable defaults matter: if the user doesn't specify AI review settings or payout, leave those as sensible platform defaults rather than asking about everything.
 3. Call propose_drafts as soon as you have at least one complete draft — don't wait to batch everything into one giant call. The user can ask for more drafts in the same conversation; each call adds to what's already staged, nothing is replaced. When a turn is about a NEW campaign, only include that new campaign in propose_drafts — never pad the call with a draft you already staged in an earlier turn just to "confirm" it's still there.
 4. STORE TARGETING: when cloning, copy storeIds verbatim from the source campaign (get_past_campaign or clone_campaign_by_id gives you this). For a genuinely new campaign, leave storeIds empty rather than guessing which stores match a fuzzy description like "our usual stores" — the human fills targeting in on the draft card, where it's easy to pick from a real list.
-5. If a request is ambiguous (which brand, which month, which of several same-month campaigns), ask a clarifying question in your reply instead of guessing — a wrong guess costs the user more time than a quick question.
-6. Each draft's fields describe only that one campaign. Don't carry over brand_id, category_id, execution_type_id, or any other field from a different campaign you're staging or discussed earlier in this conversation, unless the user's request actually implies they should be shared (e.g. "another Tide campaign" clearly means the same brand — a generic new campaign with no stated brand does not).
+5. CLONING IS COPY-EVERYTHING, NOT JUST THE OBVIOUS FIELDS: the source campaign returned by get_past_campaign/clone_campaign_by_id already has scoring_rubric, instructions, skus, payout_tiers, and reference_images — carry ALL of them into propose_drafts verbatim (adjusting only name/dates, and other fields the user explicitly asked to change), not just execution_type_id and storeIds. Never invent a reference_images URL yourself — only ever copy it from that tool result.
+6. If a request is ambiguous (which brand, which month, which of several same-month campaigns), ask a clarifying question in your reply instead of guessing — a wrong guess costs the user more time than a quick question.
+7. Each draft's fields describe only that one campaign. Don't carry over brand_id, category_id, execution_type_id, or any other field from a different campaign you're staging or discussed earlier in this conversation, unless the user's request actually implies they should be shared (e.g. "another Tide campaign" clearly means the same brand — a generic new campaign with no stated brand does not).
 
 Keep replies short — a sentence or two confirming what you've staged or asking what's still needed. The draft cards themselves show the details; don't restate them in prose.${stagedNote}`;
 }

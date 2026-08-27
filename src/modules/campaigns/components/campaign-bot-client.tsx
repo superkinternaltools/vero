@@ -1,20 +1,33 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition, type ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
-import { Send, X, Sparkles } from "lucide-react";
+import { Send, X, Sparkles, ImagePlus, PlusCircle, Trash2, ChevronDown, AlertCircle } from "lucide-react";
 import { Button } from "@/core/ui/button";
 import { Input } from "@/core/ui/input";
 import { MultiSelect } from "@/core/ui/multi-select";
 import { cn } from "@/core/lib/utils";
+import { createClient } from "@/core/db/client";
+import { generateRubric, generateInstructions } from "@/modules/ai-review/actions";
 import { sendCampaignBotMessage } from "../bot-actions";
 import { createCampaign } from "../actions";
-import type { DraftCampaignInput } from "../types";
+import type { DraftCampaignInput, CampaignSku } from "../types";
 
 type Opt = { id: string; name: string };
 type StoreOpt = { id: string; label: string };
 type Message = { role: "user" | "assistant"; content: string };
 type Draft = DraftCampaignInput & { _key: string };
+
+function gaps(draft: Draft): string[] {
+  const g: string[] = [];
+  if (draft.storeIds.length === 0) g.push("no stores selected");
+  if (!draft.execution_type_id) g.push("no execution type");
+  if (!draft.scoring_rubric.trim()) g.push("no scoring rubric");
+  if (!draft.instructions.trim()) g.push("no instructions");
+  if (draft.category_id && draft.skus.length === 0) g.push("no SKUs");
+  if (draft.reference_images.length === 0) g.push("no reference images");
+  return g;
+}
 
 const selectClass =
   "w-full rounded-xl border border-transparent bg-input px-3 py-2.5 text-sm text-foreground focus:border-primary focus:bg-card focus:outline-none focus:ring-2 focus:ring-primary/30";
@@ -79,10 +92,53 @@ export function CampaignBotClient({
   const [creating, setCreating] = useState(false);
   const [createErrors, setCreateErrors] = useState<Record<string, string>>({});
   const [createdCount, setCreatedCount] = useState<number | null>(null);
+  const autoGenAttemptedRef = useRef<Set<string>>(new Set());
+  const [autoGenPending, setAutoGenPending] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, loading]);
+
+  // A genuinely new (non-cloned) draft has no rubric/instructions — draft it
+  // automatically using the same generators the manual form already offers,
+  // rather than sending the user away to fill them in. "Attempted" is a ref
+  // (imperative bookkeeping, no re-render needed) so only genuinely async
+  // work (the promise callbacks) drives setState, not the effect body itself.
+  useEffect(() => {
+    const toGenerate = drafts.filter(
+      (d) => !autoGenAttemptedRef.current.has(d._key) && d.execution_type_id && (!d.scoring_rubric.trim() || !d.instructions.trim()),
+    );
+    if (!toGenerate.length) return;
+    for (const d of toGenerate) autoGenAttemptedRef.current.add(d._key);
+
+    for (const d of toGenerate) {
+      const needsRubric = !d.scoring_rubric.trim();
+      const needsInstructions = !d.instructions.trim();
+      const executionTypeName = executionTypes.find((t) => t.id === d.execution_type_id)?.name ?? null;
+      const payoutTiers = d.payout_model === "tiered" ? d.payout_tiers : [];
+
+      Promise.resolve()
+        .then(() => setAutoGenPending((s) => new Set(s).add(d._key)))
+        .then(() =>
+          Promise.all([
+            needsRubric ? generateRubric({ campaignName: d.name, executionTypeName, skus: d.skus, payoutTiers }) : null,
+            needsInstructions ? generateInstructions({ campaignName: d.name, executionTypeName, skus: d.skus }) : null,
+          ]),
+        )
+        .then(([rubricRes, instructionsRes]) => {
+          const patch: Partial<Draft> = {};
+          if (rubricRes?.rubric) patch.scoring_rubric = rubricRes.rubric;
+          if (instructionsRes?.instructions) patch.instructions = instructionsRes.instructions;
+          if (Object.keys(patch).length) updateDraft(d._key, patch);
+          setAutoGenPending((s) => {
+            const next = new Set(s);
+            next.delete(d._key);
+            return next;
+          });
+        });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drafts]);
 
   function send() {
     const text = input.trim();
@@ -147,7 +203,7 @@ export function CampaignBotClient({
       const errors: Record<string, string> = {};
       for (const draft of drafts) {
         const { _key, ...values } = draft;
-        const res = await createCampaign({ ...values, reference_images: [] });
+        const res = await createCampaign(values);
         if (res.error) {
           errors[_key] = res.error;
           remaining.push(draft);
@@ -263,6 +319,7 @@ export function CampaignBotClient({
                   key={d._key}
                   draft={d}
                   error={createErrors[d._key]}
+                  generating={autoGenPending.has(d._key)}
                   executionTypes={executionTypes}
                   departments={departments}
                   jobTitles={jobTitles}
@@ -292,6 +349,7 @@ export function CampaignBotClient({
 function DraftCard({
   draft,
   error,
+  generating,
   executionTypes,
   departments,
   jobTitles,
@@ -303,6 +361,7 @@ function DraftCard({
 }: {
   draft: Draft;
   error?: string;
+  generating?: boolean;
   executionTypes: Opt[];
   departments: Opt[];
   jobTitles: Opt[];
@@ -312,6 +371,44 @@ function DraftCard({
   onChange: (patch: Partial<Draft>) => void;
   onRemove: () => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const draftGaps = gaps(draft);
+
+  function addSku() {
+    onChange({ skus: [...draft.skus, { name: "", qty: 0, facings: 0, shelf_number: "" }] });
+  }
+  function updateSku(i: number, patch: Partial<CampaignSku>) {
+    const skus = [...draft.skus];
+    skus[i] = { ...skus[i], ...patch };
+    onChange({ skus });
+  }
+  function removeSku(i: number) {
+    onChange({ skus: draft.skus.filter((_, j) => j !== i) });
+  }
+
+  async function onUploadImages(e: ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files;
+    if (!files?.length) return;
+    setUploading(true);
+    const supabase = createClient();
+    const urls: string[] = [];
+    for (const file of Array.from(files)) {
+      const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const path = `${crypto.randomUUID()}-${safe}`;
+      const { error: upErr } = await supabase.storage.from("campaign-references").upload(path, file, { upsert: false });
+      if (upErr) continue;
+      const { data } = supabase.storage.from("campaign-references").getPublicUrl(path);
+      urls.push(data.publicUrl);
+    }
+    onChange({ reference_images: [...draft.reference_images, ...urls] });
+    setUploading(false);
+    e.target.value = "";
+  }
+  function removeImage(i: number) {
+    onChange({ reference_images: draft.reference_images.filter((_, j) => j !== i) });
+  }
+
   return (
     <div className="rounded-xl border border-border bg-background p-3">
       <div className="mb-2 flex items-start justify-between gap-2">
@@ -428,9 +525,103 @@ function DraftCard({
         )}
       </div>
 
-      <p className="mt-2 text-[11px] text-muted-foreground">
-        Rubric, instructions, and SKU details can be refined after creation on the full campaign edit page.
-      </p>
+      {generating && (
+        <p className="mt-2 flex items-center gap-1 text-[11px] text-primary">
+          <Sparkles className="h-3 w-3" />
+          Drafting rubric &amp; instructions…
+        </p>
+      )}
+
+      {draftGaps.length > 0 && (
+        <p className="mt-2 flex items-start gap-1 text-[11px] text-warning">
+          <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+          Needs review: {draftGaps.join(", ")}
+        </p>
+      )}
+
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="mt-2 flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+      >
+        <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-180")} />
+        {expanded ? "Hide" : "Show"} rubric, instructions, SKUs &amp; reference images
+      </button>
+
+      {expanded && (
+        <div className="mt-2 space-y-3 border-t border-border pt-3">
+          <div>
+            <label className={labelClass}>Execution instructions</label>
+            <textarea
+              value={draft.instructions}
+              onChange={(e) => onChange({ instructions: e.target.value })}
+              rows={3}
+              className={selectClass + " resize-y"}
+              placeholder="Place all products on the display, fully stocked…"
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Brand scoring rubric</label>
+            <textarea
+              value={draft.scoring_rubric}
+              onChange={(e) => onChange({ scoring_rubric: e.target.value })}
+              rows={3}
+              className={selectClass + " resize-y"}
+              placeholder="Full product facing forward = high score…"
+            />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between">
+              <label className={labelClass}>SKUs</label>
+              <button type="button" onClick={addSku} className="flex items-center gap-1 text-xs text-primary hover:underline">
+                <PlusCircle className="h-3.5 w-3.5" />
+                Add SKU
+              </button>
+            </div>
+            {draft.skus.length > 0 && (
+              <div className="mt-1 space-y-1">
+                {draft.skus.map((sku, i) => (
+                  <div key={i} className="flex items-center gap-1">
+                    <Input value={sku.name} onChange={(e) => updateSku(i, { name: e.target.value })} placeholder="SKU name" className="!py-1.5 flex-1 text-xs" />
+                    <Input type="number" value={String(sku.qty)} onChange={(e) => updateSku(i, { qty: Number(e.target.value) })} placeholder="Qty" className="!py-1.5 w-16 text-xs" />
+                    <Input type="number" value={String(sku.facings)} onChange={(e) => updateSku(i, { facings: Number(e.target.value) })} placeholder="Facings" className="!py-1.5 w-16 text-xs" />
+                    <Input value={sku.shelf_number} onChange={(e) => updateSku(i, { shelf_number: e.target.value })} placeholder="Shelf#" className="!py-1.5 w-16 text-xs" />
+                    <button type="button" onClick={() => removeSku(i)} className="shrink-0 rounded-lg p-1 text-muted-foreground hover:bg-danger/10 hover:text-danger">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <label className={labelClass}>Reference images</label>
+            <div className="mt-1 flex flex-wrap gap-2">
+              {draft.reference_images.map((url, i) => (
+                <div key={url} className="relative h-16 w-16 overflow-hidden rounded-lg border border-border">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={url} alt="Reference" className="h-full w-full object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => removeImage(i)}
+                    aria-label="Remove image"
+                    className="absolute right-0.5 top-0.5 rounded-full bg-black/60 p-0.5 text-white hover:bg-black/80"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+              <label className="flex h-16 w-16 cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border text-[10px] text-muted-foreground hover:bg-muted">
+                <input type="file" accept="image/*" multiple className="hidden" onChange={onUploadImages} disabled={uploading} />
+                <ImagePlus className="h-4 w-4" />
+                {uploading ? "…" : "Add"}
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

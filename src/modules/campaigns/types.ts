@@ -64,9 +64,10 @@ export type CampaignListRow = {
 };
 
 /** What the campaign-creation bot deals in — everything a real campaign
- * needs except reference_images (the bot never has photos to offer; those
- * can be added by hand after creation if wanted). */
-export type DraftCampaignInput = Omit<CampaignFormValues, "reference_images">;
+ * needs. reference_images is optional: populated when cloning (copied
+ * verbatim from the source campaign, never invented by the model for a
+ * brand-new one) or filled in by hand on the draft card. */
+export type DraftCampaignInput = Omit<CampaignFormValues, "reference_images"> & { reference_images: string[] };
 
 export const EMPTY_CAMPAIGN: CampaignFormValues = {
   name: "",
