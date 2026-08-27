@@ -58,6 +58,22 @@ export async function listCampaignsByBrand(brandId: string): Promise<BrandCampai
   return (data as BrandCampaignSummary[]) ?? [];
 }
 
+/** Finds campaigns by name substring, regardless of brand — most campaigns
+ * don't have a brand tagged yet, so the campaign-creation bot needs a way
+ * to find something to clone by its actual name, not just via a brand
+ * that may not exist. */
+export async function findCampaignsByName(query: string): Promise<BrandCampaignSummary[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("campaigns")
+    .select("id, name, start_date, end_date, status")
+    .ilike("name", `%${query}%`)
+    .is("deleted_at", null)
+    .order("start_date", { ascending: false })
+    .limit(20);
+  return (data as BrandCampaignSummary[]) ?? [];
+}
+
 export async function getCampaign(
   id: string,
 ): Promise<(CampaignFormValues & { id: string }) | null> {

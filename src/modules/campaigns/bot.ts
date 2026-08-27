@@ -9,7 +9,7 @@ import {
   listBrands,
 } from "@/modules/org/queries";
 import { listStores } from "@/modules/stores/queries";
-import { getCampaign, listCampaignsByBrand } from "./queries";
+import { getCampaign, listCampaignsByBrand, findCampaignsByName } from "./queries";
 import { EMPTY_CAMPAIGN } from "./types";
 import type { DraftCampaignInput, PayoutTier, CampaignSku } from "./types";
 
@@ -68,6 +68,28 @@ async function toolGetPastCampaign(brandName: string, monthLabel: string) {
   return { source: matches[0], draft };
 }
 
+/** Most campaigns don't have a brand tagged yet — this is the fallback (and
+ * often the FIRST thing to try) when the user names a specific campaign
+ * directly, e.g. "clone Teddy Diapers - August", rather than asking for a
+ * brand's history. Searches by name substring across all campaigns. */
+async function toolFindCampaignByName(query: string) {
+  const matches = await findCampaignsByName(query);
+  if (!matches.length) return { error: `No campaign matching "${query}".` };
+  return { campaigns: matches };
+}
+
+/** Given a specific campaign id (from find_campaign_by_name or
+ * list_brand_campaign_history), returns its full configuration to use as a
+ * clone starting point — the name-based counterpart to get_past_campaign. */
+async function toolCloneCampaignById(campaignId: string) {
+  const full = await getCampaign(campaignId);
+  if (!full) return { error: "That campaign could not be loaded — check the id came from find_campaign_by_name or list_brand_campaign_history." };
+  const { id, reference_images, ...draft } = full;
+  void id;
+  void reference_images;
+  return { source: { id: full.id, name: full.name }, draft };
+}
+
 // ==================== tools the model can call ====================
 
 const TOOLS: ChatCompletionTool[] = [
@@ -84,6 +106,23 @@ const TOOLS: ChatCompletionTool[] = [
       name: "list_brand_campaign_history",
       description: "List every past campaign for a brand (name, dates, status) — use to answer 'what have we run for Tide' or to find a specific month to clone.",
       parameters: { type: "object", properties: { brandName: { type: "string" } }, required: ["brandName"] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "find_campaign_by_name",
+      description:
+        "Find campaigns by name, regardless of brand — most campaigns don't have a brand tagged yet. Use this FIRST whenever the user names a specific campaign directly (e.g. \"clone Teddy Diapers - August\"), rather than assuming it's a known brand. Returns candidates with id/name/dates/status; if there's more than one plausible match, ask the user which one rather than guessing.",
+      parameters: { type: "object", properties: { query: { type: "string", description: "The campaign name or a distinctive part of it." } }, required: ["query"] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "clone_campaign_by_id",
+      description: "Get a specific campaign's full configuration (by id, from find_campaign_by_name or list_brand_campaign_history) to use as a clone starting point.",
+      parameters: { type: "object", properties: { campaignId: { type: "string" } }, required: ["campaignId"] },
     },
   },
   {
@@ -180,6 +219,8 @@ async function executeTool(name: string, args: any): Promise<any> {
     }
     if (name === "list_brand_campaign_history") return toolListBrandCampaignHistory(args.brandName ?? "");
     if (name === "get_past_campaign") return toolGetPastCampaign(args.brandName ?? "", args.monthLabel ?? "");
+    if (name === "find_campaign_by_name") return toolFindCampaignByName(args.query ?? "");
+    if (name === "clone_campaign_by_id") return toolCloneCampaignById(args.campaignId ?? "");
     if (name === "propose_drafts") {
       const drafts = Array.isArray(args.drafts) ? args.drafts.map(normalizeDraft) : [];
       return { drafts };
@@ -263,10 +304,10 @@ function buildSystemPrompt(stagedNames: string[]): string {
 HARD RULE — YOU NEVER CREATE CAMPAIGNS: propose_drafts only stages drafts for human review. Nothing is saved to Vero until the user reviews the resulting cards and clicks "Create". Never say you "created" or "set up" a campaign — say you've "drafted" or "staged" it for review.
 
 WORKFLOW:
-1. To clone a past campaign: call list_brands (if you don't already know the brand's id), then list_brand_campaign_history or get_past_campaign to find the source campaign. get_past_campaign returns candidates instead of a single match when the month is ambiguous — ask the user to pick rather than guessing.
+1. To clone a past campaign: most campaigns do NOT have a brand tagged yet, so when the user names a specific campaign directly (e.g. "clone Teddy Diapers - August"), use find_campaign_by_name FIRST — do not assume it's a known brand or tell the user no such brand exists just because list_brands doesn't have it. Only reach for the brand-based tools (list_brands, list_brand_campaign_history, get_past_campaign) when the user is asking about a brand's history in general (e.g. "what have we run for Tide") rather than one specific named campaign. Both find_campaign_by_name and get_past_campaign return candidates instead of a single match when there's ambiguity — ask the user to pick rather than guessing.
 2. To build a new campaign: gather what's needed through conversation (name/brand, execution type, frequency, dates, targeting, payout, SKUs if it's a Brand Visibility campaign) — look up valid ids via list_execution_types/list_departments/list_job_titles/list_categories/list_payout_models/list_stores rather than inventing them. Reasonable defaults matter: if the user doesn't specify AI review settings or payout, leave those as sensible platform defaults rather than asking about everything.
 3. Call propose_drafts as soon as you have at least one complete draft — don't wait to batch everything into one giant call. The user can ask for more drafts in the same conversation; each call adds to what's already staged, nothing is replaced. When a turn is about a NEW campaign, only include that new campaign in propose_drafts — never pad the call with a draft you already staged in an earlier turn just to "confirm" it's still there.
-4. STORE TARGETING: when cloning, copy storeIds verbatim from the source campaign (get_past_campaign gives you this). For a genuinely new campaign, leave storeIds empty rather than guessing which stores match a fuzzy description like "our usual stores" — the human fills targeting in on the draft card, where it's easy to pick from a real list.
+4. STORE TARGETING: when cloning, copy storeIds verbatim from the source campaign (get_past_campaign or clone_campaign_by_id gives you this). For a genuinely new campaign, leave storeIds empty rather than guessing which stores match a fuzzy description like "our usual stores" — the human fills targeting in on the draft card, where it's easy to pick from a real list.
 5. If a request is ambiguous (which brand, which month, which of several same-month campaigns), ask a clarifying question in your reply instead of guessing — a wrong guess costs the user more time than a quick question.
 6. Each draft's fields describe only that one campaign. Don't carry over brand_id, category_id, execution_type_id, or any other field from a different campaign you're staging or discussed earlier in this conversation, unless the user's request actually implies they should be shared (e.g. "another Tide campaign" clearly means the same brand — a generic new campaign with no stated brand does not).
 
