@@ -129,12 +129,14 @@ export function SummaryClient({
   matrix,
   rejectionReasons,
   isAdmin,
+  canReview,
 }: {
   campaigns: { id: string; name: string; status: string }[];
   selectedId: string | null;
   matrix: Matrix | null;
   rejectionReasons: { id: string; name: string }[];
   isAdmin: boolean;
+  canReview: boolean;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -912,10 +914,19 @@ export function SummaryClient({
               </div>
             )}
 
-            {/* Review actions (admin only, submission exists and not yet human-reviewed) */}
-            {isAdmin && activeSubId && viewHumanVerdict === null && cell.data.status !== "not_done" && (
+            {/* Review actions — Admins and Reviewers (their own campaigns), not
+             * gated on whether this submission was already decided: changing
+             * an existing verdict uses the exact same actions as deciding it
+             * the first time, since approveSubmission/rejectSubmission/
+             * selectPayoutTier just overwrite whatever verdict is there now. */}
+            {canReview && activeSubId && cell.data.status !== "not_done" && (
               matrix?.payoutModel === "tiered" ? (
                 <>
+                  {viewHumanVerdict && !selectedTier && (
+                    <p className="mt-3 text-xs text-muted-foreground">
+                      Currently: <span className="font-medium text-foreground">{viewPayoutTierLabel ?? viewHumanVerdict}</span> — choosing a tier below changes it.
+                    </p>
+                  )}
                   {selectedTier && (
                     <div className="mt-4 space-y-1.5">
                       <label className="block text-sm font-medium text-foreground">Rejection reason</label>
@@ -959,6 +970,11 @@ export function SummaryClient({
                 </>
               ) : (
                 <>
+                  {viewHumanVerdict && !rejecting && (
+                    <p className="mt-3 text-xs text-muted-foreground">
+                      Currently: <span className="font-medium text-foreground capitalize">{viewHumanVerdict}</span> — Approve/Reject below changes it.
+                    </p>
+                  )}
                   {rejecting && (
                     <div className="mt-4 space-y-1.5">
                       <label className="block text-sm font-medium text-foreground">Rejection reason</label>

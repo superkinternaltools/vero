@@ -24,6 +24,7 @@ export default async function SummaryPage({
       matrix={matrix}
       rejectionReasons={rejectionReasons}
       isAdmin={access.isAdmin}
+      canReview={access.isAdmin || access.allowed.includes("review")}
     />
   );
 }
