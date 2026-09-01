@@ -27,6 +27,22 @@ export function normalizeName(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+/** Supabase/PostgREST caps an unpaginated select at 1000 rows — silently,
+ * with no error. Any query over a table that can grow past that (campaign
+ * rows especially, once a few Vero syncs land) must page through with
+ * .range() or it'll quietly drop rows instead of failing loudly. */
+async function fetchAllRows<T = any>(queryFactory: (offset: number, limit: number) => PromiseLike<{ data: T[] | null; error: unknown }>): Promise<T[]> {
+  const out: T[] = [];
+  const batchSize = 1000;
+  for (let offset = 0; ; offset += batchSize) {
+    const { data, error } = await queryFactory(offset, batchSize);
+    if (error) throw error;
+    out.push(...(data ?? []));
+    if (!data || data.length < batchSize) break;
+  }
+  return out;
+}
+
 export async function listStoreOptions(): Promise<NameOption[]> {
   const supabase = await createClient();
   const { data } = await supabase.from("stores").select("id, name").is("deleted_at", null).order("name", { ascending: true });
@@ -47,9 +63,11 @@ export async function buildStoreResolver(): Promise<Map<string, string>> {
 
 export async function listCampaignOptions(): Promise<CampaignOption[]> {
   const supabase = await createClient();
-  const { data } = await supabase.from("contest_campaign_rows").select("raw_campaign_name");
+  const data = await fetchAllRows<{ raw_campaign_name: string }>((offset, limit) =>
+    supabase.from("contest_campaign_rows").select("raw_campaign_name").range(offset, offset + limit - 1),
+  );
   const seen = new Map<string, string>();
-  for (const r of (data as any[]) ?? []) {
+  for (const r of data) {
     const key = normalizeName(r.raw_campaign_name);
     if (!seen.has(key)) seen.set(key, r.raw_campaign_name.trim());
   }
@@ -60,16 +78,22 @@ export async function listCampaignOptions(): Promise<CampaignOption[]> {
 
 export async function listAvailableMonths(campaignKey: string): Promise<string[]> {
   const supabase = await createClient();
-  const [{ data: c }, { data: i }, { data: s }] = await Promise.all([
-    supabase.from("contest_campaign_rows").select("month, raw_campaign_name"),
-    supabase.from("contest_inventory_rows").select("month, raw_campaign_name"),
-    supabase.from("contest_sell_side_rows").select("month, raw_campaign_name"),
+  const [c, i, s] = await Promise.all([
+    fetchAllRows<{ month: string; raw_campaign_name: string }>((offset, limit) =>
+      supabase.from("contest_campaign_rows").select("month, raw_campaign_name").range(offset, offset + limit - 1),
+    ),
+    fetchAllRows<{ month: string; raw_campaign_name: string }>((offset, limit) =>
+      supabase.from("contest_inventory_rows").select("month, raw_campaign_name").range(offset, offset + limit - 1),
+    ),
+    fetchAllRows<{ month: string; raw_campaign_name: string }>((offset, limit) =>
+      supabase.from("contest_sell_side_rows").select("month, raw_campaign_name").range(offset, offset + limit - 1),
+    ),
   ]);
-  const all = [...((c as any[]) ?? []), ...((i as any[]) ?? []), ...((s as any[]) ?? [])];
+  const all = [...c, ...i, ...s];
   const months = new Set<string>();
   for (const r of all) {
     if (normalizeName(r.raw_campaign_name) !== campaignKey) continue;
-    months.add((r.month as string).slice(0, 7));
+    months.add(r.month.slice(0, 7));
   }
   return [...months].sort((a, b) => (a < b ? 1 : -1));
 }
@@ -89,14 +113,16 @@ export async function getUnclassifiedStatuses(campaignKey: string, month: string
   const supabase = await createClient();
   const monthDate = `${month}-01`;
 
-  const [{ data: rows }, { data: classified }] = await Promise.all([
-    supabase.from("contest_campaign_rows").select("raw_campaign_name, status").eq("month", monthDate),
+  const [rows, { data: classified }] = await Promise.all([
+    fetchAllRows<{ raw_campaign_name: string; status: string }>((offset, limit) =>
+      supabase.from("contest_campaign_rows").select("raw_campaign_name, status").eq("month", monthDate).range(offset, offset + limit - 1),
+    ),
     supabase.from("contest_status_classification").select("raw_status").eq("campaign_key", campaignKey),
   ]);
 
   const known = new Set(((classified as any[]) ?? []).map((c) => c.raw_status));
   const seen = new Set<string>();
-  for (const r of (rows as any[]) ?? []) {
+  for (const r of rows) {
     if (normalizeName(r.raw_campaign_name) !== campaignKey) continue;
     const status = (r.status as string)?.trim();
     if (status && !known.has(status)) seen.add(status);
