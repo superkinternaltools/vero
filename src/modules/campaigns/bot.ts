@@ -329,6 +329,31 @@ Keep replies short — a sentence or two confirming what you've staged or asking
 
 export type BotTurn = { role: "user" | "assistant"; content: string };
 
+type CloneSource = { skus: CampaignSku[]; reference_images: string[] };
+
+/** Bulky array fields (SKU lists, image URLs) are the ones a small model
+ * fails to faithfully retype into propose_drafts, even when told to copy
+ * them verbatim — seen live: a real 10-SKU/multi-image source campaign
+ * cloned into a draft with one empty placeholder SKU and no images, despite
+ * the rubric/instructions (plain text blobs) coming through correctly. Only
+ * applied to a single-draft turn — with more than one draft staged in the
+ * same turn there's no reliable way to know which one a given clone lookup
+ * belongs to, so leave those to the model + human review as before. */
+function backfillFromClone(drafts: DraftCampaignInput[], source: CloneSource | null): DraftCampaignInput[] {
+  if (!source || drafts.length !== 1) return drafts;
+  const d = drafts[0];
+  const skusLookEmpty = !d.skus.some((s) => s.name.trim());
+  const imagesEmpty = d.reference_images.length === 0;
+  if (!skusLookEmpty && !imagesEmpty) return drafts;
+  return [
+    {
+      ...d,
+      skus: skusLookEmpty ? source.skus : d.skus,
+      reference_images: imagesEmpty ? source.reference_images : d.reference_images,
+    },
+  ];
+}
+
 export async function runCampaignBotTurn(params: {
   history: BotTurn[];
   userMessage: string;
@@ -345,6 +370,7 @@ export async function runCampaignBotTurn(params: {
   ];
 
   const newDrafts: DraftCampaignInput[] = [];
+  let lastCloneSource: CloneSource | null = null;
 
   for (let step = 0; step < 5; step++) {
     const resp = await openai.chat.completions.create({
@@ -356,7 +382,7 @@ export async function runCampaignBotTurn(params: {
     if (!msg) return { error: "The assistant didn't return a response." };
 
     if (!msg.tool_calls || msg.tool_calls.length === 0) {
-      return { reply: msg.content ?? "I couldn't generate a response.", newDrafts };
+      return { reply: msg.content ?? "I couldn't generate a response.", newDrafts: backfillFromClone(newDrafts, lastCloneSource) };
     }
 
     messages.push(msg);
@@ -370,6 +396,9 @@ export async function runCampaignBotTurn(params: {
         }
       })();
       const result = await executeTool(call.function.name, args);
+      if ((call.function.name === "get_past_campaign" || call.function.name === "clone_campaign_by_id") && result?.draft) {
+        lastCloneSource = { skus: result.draft.skus ?? [], reference_images: result.draft.reference_images ?? [] };
+      }
       if (call.function.name === "propose_drafts" && Array.isArray(result?.drafts)) {
         newDrafts.push(...result.drafts);
       }
