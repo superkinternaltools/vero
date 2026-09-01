@@ -1307,7 +1307,7 @@ export function ReportClient({
   aiReport: ContestReport | { error: string } | null;
 }) {
   const router = useRouter();
-  const [, startTransition] = useTransition();
+  const [navPending, startTransition] = useTransition();
   const [activeSection, setActiveSection] = useState<View>("summary");
   const [chatOpen, setChatOpen] = useState(false);
   const campaignMonthKey = `${campaignKey ?? ""}:${month ?? ""}`;
@@ -1374,7 +1374,13 @@ export function ReportClient({
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Contest Impact</h1>
           <p className="mt-1 text-sm text-muted-foreground">Approved execution, poor execution, and a control group that never ran the display.</p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {navPending && (
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
+              Loading…
+            </span>
+          )}
           <div className="w-64">
             <SelectSearch
               options={campaignOptions}
@@ -1402,7 +1408,7 @@ export function ReportClient({
       )}
 
       {report && (
-        <div className="mt-4 flex items-start gap-6">
+        <div className={cn("mt-4 flex items-start gap-6 transition-opacity", navPending && "pointer-events-none opacity-50")}>
           <nav className="sticky top-4 hidden w-40 shrink-0 self-start lg:block">
             <p className="mb-2 pl-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">On this page</p>
             <div className="space-y-0.5">
