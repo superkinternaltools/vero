@@ -43,31 +43,6 @@ async function fetchAllRows<T = any>(queryFactory: (offset: number, limit: numbe
   return out;
 }
 
-/** The exact set of literal raw_campaign_name spellings (across all three
- * source tables, for this month) that this campaign's normalizeName-based
- * key resolves to. A cheap single-column pass so the real per-table fetch
- * in getContestMonthReport can filter server-side with .in(...) instead of
- * pulling every OTHER campaign's rows for the month too — without changing
- * which rows count as "this campaign", since that's still decided by the
- * same normalizeName comparison used everywhere else. */
-async function listMatchingNameVariants(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  tables: string[],
-  monthDate: string,
-  campaignKey: string,
-): Promise<string[]> {
-  const perTable = await Promise.all(
-    tables.map((table) =>
-      fetchAllRows<{ raw_campaign_name: string }>((offset, limit) =>
-        supabase.from(table).select("raw_campaign_name").eq("month", monthDate).range(offset, offset + limit - 1),
-      ),
-    ),
-  );
-  const variants = new Set<string>();
-  for (const rows of perTable) for (const r of rows) if (normalizeName(r.raw_campaign_name) === campaignKey) variants.add(r.raw_campaign_name);
-  return [...variants];
-}
-
 export async function listStoreOptions(): Promise<NameOption[]> {
   const supabase = await createClient();
   const { data } = await supabase.from("stores").select("id, name").is("deleted_at", null).order("name", { ascending: true });
@@ -103,15 +78,19 @@ export async function listCampaignOptions(): Promise<CampaignOption[]> {
 
 export async function listAvailableMonths(campaignKey: string): Promise<string[]> {
   const supabase = await createClient();
+  // campaign_key is a generated column (migration 0040) computed with the
+  // same trim/collapse-whitespace/lowercase rule as normalizeName(), so this
+  // is an indexed lookup instead of scanning every row in all three tables.
+  // The normalizeName() re-check below is a safety net, not the real filter.
   const [c, i, s] = await Promise.all([
     fetchAllRows<{ month: string; raw_campaign_name: string }>((offset, limit) =>
-      supabase.from("contest_campaign_rows").select("month, raw_campaign_name").range(offset, offset + limit - 1),
+      supabase.from("contest_campaign_rows").select("month, raw_campaign_name").eq("campaign_key", campaignKey).range(offset, offset + limit - 1),
     ),
     fetchAllRows<{ month: string; raw_campaign_name: string }>((offset, limit) =>
-      supabase.from("contest_inventory_rows").select("month, raw_campaign_name").range(offset, offset + limit - 1),
+      supabase.from("contest_inventory_rows").select("month, raw_campaign_name").eq("campaign_key", campaignKey).range(offset, offset + limit - 1),
     ),
     fetchAllRows<{ month: string; raw_campaign_name: string }>((offset, limit) =>
-      supabase.from("contest_sell_side_rows").select("month, raw_campaign_name").range(offset, offset + limit - 1),
+      supabase.from("contest_sell_side_rows").select("month, raw_campaign_name").eq("campaign_key", campaignKey).range(offset, offset + limit - 1),
     ),
   ]);
   const all = [...c, ...i, ...s];
@@ -140,7 +119,12 @@ export async function getUnclassifiedStatuses(campaignKey: string, month: string
 
   const [rows, { data: classified }] = await Promise.all([
     fetchAllRows<{ raw_campaign_name: string; status: string }>((offset, limit) =>
-      supabase.from("contest_campaign_rows").select("raw_campaign_name, status").eq("month", monthDate).range(offset, offset + limit - 1),
+      supabase
+        .from("contest_campaign_rows")
+        .select("raw_campaign_name, status")
+        .eq("campaign_key", campaignKey)
+        .eq("month", monthDate)
+        .range(offset, offset + limit - 1),
     ),
     supabase.from("contest_status_classification").select("raw_status").eq("campaign_key", campaignKey),
   ]);
@@ -342,29 +326,20 @@ export async function getContestMonthReport(campaignKey: string, month: string):
 
   const statusApproval = await getStatusApprovalMap(campaignKey);
 
-  // Narrow to this campaign's own literal name spellings for this month
-  // BEFORE the real (select *) fetch, so we don't pull every other
-  // campaign's rows for the month over the wire just to discard them below.
-  // matchesCampaign (same normalizeName comparison) still does the actual
-  // filtering afterward — this is a fetch-size optimization, not a new
-  // source of truth for "which rows belong to this campaign".
-  const nameVariants = await listMatchingNameVariants(
-    supabase,
-    ["contest_campaign_rows", "contest_inventory_rows", "contest_sell_side_rows"],
-    monthDate,
-    campaignKey,
-  );
-
-  // Fetch in batches to bypass Supabase's 1000-row default page limit.
+  // campaign_key is a generated column (migration 0040) computed with the
+  // same trim/collapse-whitespace/lowercase rule as normalizeName(), backed
+  // by an index on (campaign_key, month) — so this pulls only this
+  // campaign's own rows for the month directly, instead of every campaign's
+  // rows for the month. matchesCampaign below stays as a safety net, not the
+  // real filter.
   const fetchAll = async (table: string, batchSize: number) => {
-    if (!nameVariants.length) return [];
     const out: any[] = [];
     for (let offset = 0; ; offset += batchSize) {
       const { data, error } = await supabase
         .from(table)
         .select("*")
+        .eq("campaign_key", campaignKey)
         .eq("month", monthDate)
-        .in("raw_campaign_name", nameVariants)
         .range(offset, offset + batchSize - 1);
       if (error) throw error;
       out.push(...(data ?? []));
