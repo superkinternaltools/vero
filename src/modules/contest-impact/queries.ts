@@ -43,6 +43,31 @@ async function fetchAllRows<T = any>(queryFactory: (offset: number, limit: numbe
   return out;
 }
 
+/** The exact set of literal raw_campaign_name spellings (across all three
+ * source tables, for this month) that this campaign's normalizeName-based
+ * key resolves to. A cheap single-column pass so the real per-table fetch
+ * in getContestMonthReport can filter server-side with .in(...) instead of
+ * pulling every OTHER campaign's rows for the month too — without changing
+ * which rows count as "this campaign", since that's still decided by the
+ * same normalizeName comparison used everywhere else. */
+async function listMatchingNameVariants(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  tables: string[],
+  monthDate: string,
+  campaignKey: string,
+): Promise<string[]> {
+  const perTable = await Promise.all(
+    tables.map((table) =>
+      fetchAllRows<{ raw_campaign_name: string }>((offset, limit) =>
+        supabase.from(table).select("raw_campaign_name").eq("month", monthDate).range(offset, offset + limit - 1),
+      ),
+    ),
+  );
+  const variants = new Set<string>();
+  for (const rows of perTable) for (const r of rows) if (normalizeName(r.raw_campaign_name) === campaignKey) variants.add(r.raw_campaign_name);
+  return [...variants];
+}
+
 export async function listStoreOptions(): Promise<NameOption[]> {
   const supabase = await createClient();
   const { data } = await supabase.from("stores").select("id, name").is("deleted_at", null).order("name", { ascending: true });
@@ -317,18 +342,33 @@ export async function getContestMonthReport(campaignKey: string, month: string):
 
   const statusApproval = await getStatusApprovalMap(campaignKey);
 
+  // Narrow to this campaign's own literal name spellings for this month
+  // BEFORE the real (select *) fetch, so we don't pull every other
+  // campaign's rows for the month over the wire just to discard them below.
+  // matchesCampaign (same normalizeName comparison) still does the actual
+  // filtering afterward — this is a fetch-size optimization, not a new
+  // source of truth for "which rows belong to this campaign".
+  const nameVariants = await listMatchingNameVariants(
+    supabase,
+    ["contest_campaign_rows", "contest_inventory_rows", "contest_sell_side_rows"],
+    monthDate,
+    campaignKey,
+  );
+
   // Fetch in batches to bypass Supabase's 1000-row default page limit.
-  const fetchBatch = async (table: string, offset: number, limit: number) => {
-    const { data, error } = await supabase.from(table).select("*").eq("month", monthDate).range(offset, offset + limit - 1);
-    if (error) throw error;
-    return data ?? [];
-  };
   const fetchAll = async (table: string, batchSize: number) => {
+    if (!nameVariants.length) return [];
     const out: any[] = [];
     for (let offset = 0; ; offset += batchSize) {
-      const batch = await fetchBatch(table, offset, batchSize);
-      out.push(...batch);
-      if (batch.length < batchSize) break;
+      const { data, error } = await supabase
+        .from(table)
+        .select("*")
+        .eq("month", monthDate)
+        .in("raw_campaign_name", nameVariants)
+        .range(offset, offset + batchSize - 1);
+      if (error) throw error;
+      out.push(...(data ?? []));
+      if (!data || data.length < batchSize) break;
     }
     return out;
   };
