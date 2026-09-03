@@ -495,109 +495,11 @@ function InventorySummarySection({ report }: { report: ContestMonthReport }) {
 type View = "summary" | "metrics" | "stores";
 const VIEW_LABELS: Record<View, string> = { summary: "Summary", metrics: "Detailed metrics", stores: "Store performance" };
 
-function SummaryView({ report, onNavigateToStores }: { report: ContestMonthReport; onNavigateToStores: () => void }) {
+function SummaryView({ report }: { report: ContestMonthReport }) {
   return (
     <div className="space-y-4">
       <InventorySummarySection report={report} />
       <FullDataTable report={report} />
-      <ExecutionGroupsCard report={report} onNavigateToStores={onNavigateToStores} />
-    </div>
-  );
-}
-
-/** One row per group — name, GMV, sell-through, and the current store count
- * — plus a single week-by-week strip for how the approved/poor pool
- * reshuffles. Sell-through (not a raw stock rupee figure) is the number that
- * actually says who's converting better, and the weekly counts live in
- * exactly one place instead of two. Carries its own compare-against toggle
- * — each chart/table on the page compares independently now, rather than
- * one setting driving the whole report. */
-function ExecutionGroupsCard({ report, onNavigateToStores }: { report: ContestMonthReport; onNavigateToStores: () => void }) {
-  const basis: ComparisonBasis = "lastMonth";
-  const gmv = report.metrics.find((m) => m.key === "gmv")!;
-  const sellThrough = report.metrics.find((m) => m.key === "sellThrough");
-  const doh = report.metrics.find((m) => m.key === "doh");
-  const groups: ContestGroup[] = ["approved", "poor", "control"];
-
-  const lastWeek = report.weeklyGroupCounts[report.weeklyGroupCounts.length - 1];
-  const splitRows = report.weeklyGroupCounts.map((w) => ({ week: w.week, approved: w.approved, poor: w.poor, total: w.approved + w.poor }));
-  const showSplit = splitRows.some((r) => r.total > 0);
-
-  return (
-    <div className="rounded-2xl border border-border bg-card p-5">
-      <h3 className="text-sm font-semibold text-foreground">Execution groups</h3>
-      <div className="divide-y divide-border">
-        {groups.map((g) => {
-          const growth = basis === "lastMonth" ? gmv.monthGrowthVsLastMonth[g] : gmv.monthGrowthVsLastYear[g];
-          const weekCounts = report.weeklyGroupCounts.map((w) => w[g]);
-          const allSame = weekCounts.length > 0 && weekCounts.every((c) => c === weekCounts[0]);
-          const st = sellThrough?.monthAvg[g] ?? null;
-          const dohVal = doh?.monthAvg[g] ?? null;
-          return (
-            <button
-              key={g}
-              type="button"
-              onClick={onNavigateToStores}
-              className="grid w-full grid-cols-1 items-center gap-2 py-3.5 text-left first:pt-3 last:pb-0 sm:grid-cols-[1.3fr_1fr_0.9fr_0.7fr] sm:gap-4"
-            >
-              <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
-                <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: GROUP_COLOR[g] }} />
-                {GROUP_LABELS[g]}
-              </div>
-              <div>
-                <span className="text-lg font-semibold tabular-nums" style={{ color: GROUP_COLOR[g] }}>
-                  {fmtINR(gmv.monthAvg[g])}
-                </span>
-                <p className="text-[11px] text-muted-foreground">GMV · {fmtGrowth(growth, "currency")} {fmtMonthLabel(basis)}</p>
-              </div>
-              <div>
-                <span className="text-lg font-semibold tabular-nums text-foreground">{st != null ? `${st.toFixed(1)}%` : "—"}</span>
-                <p className="text-[11px] text-muted-foreground">
-                  sell-through{dohVal != null && ` · ${dohVal.toFixed(0)}d on hand`}
-                </p>
-              </div>
-              <div className="sm:text-right">
-                <span className="text-lg font-semibold tabular-nums text-foreground">{lastWeek ? lastWeek[g] : (weekCounts[0] ?? 0)}</span>
-                <p className="text-[11px] text-muted-foreground">{allSame ? "stores" : `stores, latest wk ${lastWeek?.week ?? ""}`}</p>
-              </div>
-            </button>
-          );
-        })}
-      </div>
-
-      {showSplit && (
-        <div className="mt-4 border-t border-border pt-4">
-          <h4 className="text-xs font-semibold text-foreground">Approved ⇄ poor, week by week</h4>
-          <p className="mb-3 mt-0.5 text-[11px] text-muted-foreground">
-            The same pool of contest stores reshuffles as verdicts change — control isn&apos;t part of this pool.
-          </p>
-          <div className="space-y-1.5">
-            {splitRows.map((r) => (
-              <div key={r.week} className="flex items-center gap-3">
-                <span className="w-10 shrink-0 text-[11px] text-muted-foreground">Wk {r.week}</span>
-                <div className="flex h-5 flex-1 overflow-hidden rounded-md bg-input">
-                  {r.total > 0 && (
-                    <>
-                      <div
-                        className="flex items-center justify-center text-[10px] font-medium text-background"
-                        style={{ width: `${(r.approved / r.total) * 100}%`, background: GROUP_COLOR.approved }}
-                      >
-                        {r.approved > 0 ? r.approved : ""}
-                      </div>
-                      <div
-                        className="flex items-center justify-center text-[10px] font-medium text-background"
-                        style={{ width: `${(r.poor / r.total) * 100}%`, background: GROUP_COLOR.poor }}
-                      >
-                        {r.poor > 0 ? r.poor : ""}
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -1038,7 +940,7 @@ export function ReportClient({
           <div className="min-w-0 flex-1 space-y-10">
             <section id="sec-summary" className="scroll-mt-4">
               <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{VIEW_LABELS.summary}</h2>
-              <SummaryView report={report} onNavigateToStores={() => scrollToSection("stores")} />
+              <SummaryView report={report} />
             </section>
 
             <section id="sec-metrics" className="scroll-mt-4">
