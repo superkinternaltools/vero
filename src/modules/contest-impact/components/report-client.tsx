@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Maximize2, MessageCircle } from "lucide-react";
 import { SelectSearch } from "@/core/ui/select-search";
 import { Modal } from "@/core/ui/modal";
@@ -26,6 +26,70 @@ const GROUP_COLOR: Record<ContestGroup, string> = {
   poor: "var(--color-danger)",
   control: "var(--color-muted-foreground)",
 };
+
+/** Shape, not just color, tells groups apart — matters most exactly when two
+ * groups' lines cross or share a value: at that point their markers land on
+ * top of each other, and color alone (plus a colorblind viewer) can't say
+ * which is which. A white halo stroke keeps overlapping markers visually
+ * separable as distinct rings instead of one blob. */
+const GROUP_SHAPE: Record<ContestGroup, "circle" | "square" | "diamond"> = {
+  approved: "circle",
+  poor: "square",
+  control: "diamond",
+};
+
+function ChartMarker({
+  shape,
+  cx,
+  cy,
+  r,
+  fill,
+  onMouseEnter,
+  onMouseLeave,
+}: {
+  shape: "circle" | "square" | "diamond";
+  cx: number;
+  cy: number;
+  r: number;
+  fill: string;
+  onMouseEnter?: (e: React.MouseEvent<SVGGraphicsElement>) => void;
+  onMouseLeave?: () => void;
+}) {
+  const common = { fill, stroke: "var(--color-card)", strokeWidth: 1.5, style: { cursor: "pointer" as const }, onMouseEnter, onMouseLeave };
+  if (shape === "square") {
+    const s = r * 1.7;
+    return <rect x={cx - s / 2} y={cy - s / 2} width={s} height={s} rx={1.5} {...common} />;
+  }
+  if (shape === "diamond") {
+    const d = r * 1.35;
+    return <polygon points={`${cx},${cy - d} ${cx + d},${cy} ${cx},${cy + d} ${cx - d},${cy}`} {...common} />;
+  }
+  return <circle cx={cx} cy={cy} r={r} {...common} />;
+}
+
+/** Percent-of-container math for tooltip position breaks the moment the SVG's
+ * rendered box has a different aspect ratio than its viewBox (a wide card
+ * with height capped letterboxes the content, adding blank side margins the
+ * math doesn't know about) — hover then lands nowhere near the actual point.
+ * Measuring the hovered marker's real DOM position instead is correct
+ * regardless of any scaling/letterboxing. */
+function useSvgTooltip<T>() {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [tooltip, setTooltip] = useState<(T & { left: number; top: number }) | null>(null);
+
+  function show(e: React.MouseEvent<SVGGraphicsElement>, data: T) {
+    const container = containerRef.current;
+    if (!container) return;
+    const pointRect = e.currentTarget.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    setTooltip({ ...data, left: pointRect.left + pointRect.width / 2 - containerRect.left, top: pointRect.top - containerRect.top });
+  }
+  function hide() {
+    setTooltip(null);
+  }
+
+  return { containerRef, tooltip, show, hide };
+}
 
 // ==================== formatting ====================
 
@@ -104,7 +168,7 @@ function GroupLegend({ groups = ["approved", "poor", "control"] as ContestGroup[
 
 // ==================== weekly chart (hover reveals growth) ====================
 
-type Hover = { group: ContestGroup; week: number } | null;
+type WeeklyTooltipData = { group: ContestGroup; week: number; value: number | null; growth: number | null; n: number };
 
 function WeeklyChart({
   metric,
@@ -117,7 +181,7 @@ function WeeklyChart({
   groups?: ContestGroup[];
   height?: number;
 }) {
-  const [hover, setHover] = useState<Hover>(null);
+  const { containerRef, tooltip, show, hide } = useSvgTooltip<WeeklyTooltipData>();
   const meta = SELL_METRICS.find((m) => m.key === metric.key)!;
   const W = 620;
   const H = height;
@@ -140,17 +204,30 @@ function WeeklyChart({
 
   const gridY = [0, 0.5, 1].map((f) => min + f * range);
 
-  const hoveredPoint =
-    hover &&
-    metric.weekly.find((w) => w.week === hover.week) &&
-    { week: hover.week, value: metric.weekly.find((w) => w.week === hover.week)!.value[hover.group],
-      n: metric.weekly.find((w) => w.week === hover.week)!.n[hover.group],
-      growth: basis === "lastMonth"
-        ? metric.weekly.find((w) => w.week === hover.week)!.growthVsLastMonth[hover.group]
-        : metric.weekly.find((w) => w.week === hover.week)!.growthVsLastYear[hover.group] };
+  // When two or more groups land on (near) the same y at the same week, their
+  // markers would render fully on top of each other — invisible and
+  // unhoverable for whichever is drawn last. Nudging the coincident markers a
+  // few px apart keeps every group independently visible and hoverable; the
+  // line itself still passes through the true point.
+  const jitter = useMemo(() => {
+    const out = new Map<string, number>();
+    metric.weekly.forEach((w, i) => {
+      const present = linesByGroup
+        .map(({ group, points }) => ({ group, y: points[i]?.y ?? null }))
+        .filter((p): p is { group: ContestGroup; y: number } => p.y != null);
+      present.forEach((p) => {
+        const cluster = present.filter((o) => Math.abs(o.y - p.y) < 3);
+        if (cluster.length > 1) {
+          const idx = cluster.findIndex((c) => c.group === p.group);
+          out.set(`${w.week}-${p.group}`, (idx - (cluster.length - 1) / 2) * 5);
+        }
+      });
+    });
+    return out;
+  }, [linesByGroup, metric.weekly]);
 
   return (
-    <div className="relative">
+    <div className="relative" ref={containerRef}>
       <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full" style={{ maxHeight: H }}>
         {gridY.map((v, i) => (
           <g key={i}>
@@ -174,18 +251,23 @@ function WeeklyChart({
                   strokeDasharray={group === "control" ? "5 4" : undefined}
                 />
               )}
-              {valid.map((p) => (
-                <circle
-                  key={p.week}
-                  cx={p.x}
-                  cy={p.y}
-                  r={hover?.group === group && hover?.week === p.week ? 7 : 5}
-                  fill={GROUP_COLOR[group]}
-                  style={{ cursor: "pointer" }}
-                  onMouseEnter={() => setHover({ group, week: p.week })}
-                  onMouseLeave={() => setHover(null)}
-                />
-              ))}
+              {valid.map((p) => {
+                const w = metric.weekly.find((wk) => wk.week === p.week)!;
+                const growth = basis === "lastMonth" ? w.growthVsLastMonth[group] : w.growthVsLastYear[group];
+                const isHovered = tooltip?.group === group && tooltip.week === p.week;
+                return (
+                  <ChartMarker
+                    key={p.week}
+                    shape={GROUP_SHAPE[group]}
+                    cx={p.x + (jitter.get(`${p.week}-${group}`) ?? 0)}
+                    cy={p.y}
+                    r={isHovered ? 7 : 5}
+                    fill={GROUP_COLOR[group]}
+                    onMouseEnter={(e) => show(e, { group, week: p.week, value: p.value, growth, n: w.n[group] })}
+                    onMouseLeave={hide}
+                  />
+                );
+              })}
             </g>
           );
         })}
@@ -197,19 +279,20 @@ function WeeklyChart({
         ))}
       </svg>
 
-      {hoveredPoint && (
+      {tooltip && (
         <div
           className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-md border border-border bg-foreground px-2.5 py-1.5 text-xs font-medium text-background shadow-lg"
-          style={{
-            left: `${(xFor(metric.weekly.findIndex((w) => w.week === hover!.week)) / W) * 100}%`,
-            top: `${(yFor(hoveredPoint.value ?? 0) / H) * 100 - 2}%`,
-          }}
+          style={{ left: tooltip.left, top: tooltip.top - 6 }}
         >
-          <div>{fmtHard(hoveredPoint.value, meta.kind)}</div>
-          <div className="text-[11px] opacity-80">
-            {fmtGrowth(hoveredPoint.growth, meta.kind)} {fmtMonthLabel(basis)}
+          <div className="mb-0.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide opacity-70">
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: GROUP_COLOR[tooltip.group] }} />
+            {GROUP_LABELS[tooltip.group]}
           </div>
-          <div className="text-[11px] opacity-80">{hoveredPoint.n} {hoveredPoint.n === 1 ? "store" : "stores"}</div>
+          <div>{fmtHard(tooltip.value, meta.kind)}</div>
+          <div className="text-[11px] opacity-80">
+            {fmtGrowth(tooltip.growth, meta.kind)} {fmtMonthLabel(basis)}
+          </div>
+          <div className="text-[11px] opacity-80">{tooltip.n} {tooltip.n === 1 ? "store" : "stores"}</div>
         </div>
       )}
       <p className="mt-2 text-center text-[11px] text-muted-foreground">Hover a point for growth {fmtMonthLabel(basis)}</p>
@@ -226,6 +309,12 @@ const STOCK_SERIES_COLOR: Record<StockSeries, string> = {
   poor: "var(--color-danger)",
 };
 const STOCK_SERIES_LABEL: Record<StockSeries, string> = { total: "Total", approved: "Approved", poor: "Poor" };
+const STOCK_SERIES_SHAPE: Record<StockSeries, "circle" | "square" | "diamond"> = {
+  total: "diamond",
+  approved: "circle",
+  poor: "square",
+};
+const STOCK_SERIES: StockSeries[] = ["total", "approved", "poor"];
 
 /** Store availability by group, with a clickable legend (click a series to
  * focus it — the others fade) and hover tooltips showing the exact value. */
@@ -236,7 +325,7 @@ function StoreAvailabilityChart({
   weekly: { week: number; totalStoreAvailability: number | null; approvedStoreAvailability: number | null; poorStoreAvailability: number | null }[];
   groupCounts: WeeklyGroupCounts[];
 }) {
-  const [hover, setHover] = useState<{ series: StockSeries; week: number } | null>(null);
+  const { containerRef, tooltip, show, hide } = useSvgTooltip<{ series: StockSeries; week: number; value: number | null; n: number | null }>();
   const countFor = (series: StockSeries, week: number): number | null => {
     const wk = groupCounts.find((w) => w.week === week);
     if (!wk) return null;
@@ -256,10 +345,27 @@ function StoreAvailabilityChart({
   };
   const ptsFor = (series: StockSeries) =>
     weekly.map((w, i) => ({ x: xFor(i), y: w[fieldFor[series]] != null ? yFor(w[fieldFor[series]]!) : null, week: w.week, value: w[fieldFor[series]] }));
-  const series: StockSeries[] = ["total", "approved", "poor"];
+  const series = STOCK_SERIES;
   const allPts = Object.fromEntries(series.map((s) => [s, ptsFor(s)])) as Record<StockSeries, ReturnType<typeof ptsFor>>;
 
-  const hoveredValue = hover ? allPts[hover.series].find((p) => p.week === hover.week) : null;
+  // Same coincident-marker problem as WeeklyChart — nudge apart when two
+  // series share (near) the same value at the same week.
+  const jitter = useMemo(() => {
+    const out = new Map<string, number>();
+    weekly.forEach((w, i) => {
+      const present = series
+        .map((s) => ({ s, y: allPts[s][i]?.y ?? null }))
+        .filter((p): p is { s: StockSeries; y: number } => p.y != null);
+      present.forEach((p) => {
+        const cluster = present.filter((o) => Math.abs(o.y - p.y) < 3);
+        if (cluster.length > 1) {
+          const idx = cluster.findIndex((c) => c.s === p.s);
+          out.set(`${w.week}-${p.s}`, (idx - (cluster.length - 1) / 2) * 5);
+        }
+      });
+    });
+    return out;
+  }, [allPts, series, weekly]);
 
   return (
     <div>
@@ -284,7 +390,7 @@ function StoreAvailabilityChart({
         </span>
       </div>
 
-      <div className="relative">
+      <div className="relative" ref={containerRef}>
         <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full">
           <line x1={PADX} x2={W - 10} y1={yFor(100)} y2={yFor(100)} stroke="var(--color-warning)" strokeDasharray="5 4" strokeWidth={1.5} />
           <text x={W - 10} y={yFor(100) - 6} fontSize={10} textAnchor="end" fill="var(--color-warning)">100% target</text>
@@ -309,18 +415,21 @@ function StoreAvailabilityChart({
                     strokeWidth={focus === s ? 3.5 : 2.75}
                   />
                 )}
-                {valid.map((p) => (
-                  <circle
-                    key={p.week}
-                    cx={p.x}
-                    cy={p.y}
-                    r={hover?.series === s && hover?.week === p.week ? 7 : 5}
-                    fill={STOCK_SERIES_COLOR[s]}
-                    style={{ cursor: "pointer" }}
-                    onMouseEnter={() => setHover({ series: s, week: p.week })}
-                    onMouseLeave={() => setHover(null)}
-                  />
-                ))}
+                {valid.map((p) => {
+                  const isHovered = tooltip?.series === s && tooltip.week === p.week;
+                  return (
+                    <ChartMarker
+                      key={p.week}
+                      shape={STOCK_SERIES_SHAPE[s]}
+                      cx={p.x + (jitter.get(`${p.week}-${s}`) ?? 0)}
+                      cy={p.y}
+                      r={isHovered ? 7 : 5}
+                      fill={STOCK_SERIES_COLOR[s]}
+                      onMouseEnter={(e) => show(e, { series: s, week: p.week, value: p.value, n: countFor(s, p.week) })}
+                      onMouseLeave={hide}
+                    />
+                  );
+                })}
               </g>
             );
           })}
@@ -329,19 +438,17 @@ function StoreAvailabilityChart({
             <text key={w.week} x={xFor(i)} y={H - 4} fontSize={11} textAnchor="middle" fill="var(--color-muted-foreground)">Week {w.week}</text>
           ))}
         </svg>
-        {hover && hoveredValue && (
+        {tooltip && (
           <div
             className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-md border border-border bg-foreground px-2.5 py-1.5 text-xs font-medium text-background shadow-lg"
-            style={{
-              left: `${(xFor(weekly.findIndex((w) => w.week === hover.week)) / W) * 100}%`,
-              top: `${(yFor(hoveredValue.value ?? 0) / H) * 100 - 2}%`,
-            }}
+            style={{ left: tooltip.left, top: tooltip.top - 6 }}
           >
-            <div>{STOCK_SERIES_LABEL[hover.series]}: {fmtPercent(hoveredValue.value)}</div>
-            {(() => {
-              const n = countFor(hover.series, hover.week);
-              return n != null ? <div className="text-[11px] opacity-80">{n} {n === 1 ? "store" : "stores"}</div> : null;
-            })()}
+            <div className="mb-0.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide opacity-70">
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: STOCK_SERIES_COLOR[tooltip.series] }} />
+              {STOCK_SERIES_LABEL[tooltip.series]}
+            </div>
+            <div>{fmtPercent(tooltip.value)}</div>
+            {tooltip.n != null && <div className="text-[11px] opacity-80">{tooltip.n} {tooltip.n === 1 ? "store" : "stores"}</div>}
           </div>
         )}
       </div>
@@ -351,7 +458,7 @@ function StoreAvailabilityChart({
 
 /** Warehouse availability — a single shared pool, so one line and no legend. */
 function WarehouseAvailabilityChart({ weekly }: { weekly: { week: number; whAvailability: number | null }[] }) {
-  const [hover, setHover] = useState<number | null>(null);
+  const { containerRef, tooltip, show, hide } = useSvgTooltip<{ week: number; value: number | null }>();
   const W = 620, H = 200, PADX = 55, PADY = 24;
   const min = 0;
   const max = 110;
@@ -359,10 +466,9 @@ function WarehouseAvailabilityChart({ weekly }: { weekly: { week: number; whAvai
   const yFor = (v: number) => H - PADY - ((v - min) / (max - min)) * (H - PADY * 2);
   const pts = weekly.map((w, i) => ({ x: xFor(i), y: w.whAvailability != null ? yFor(w.whAvailability) : null, week: w.week, value: w.whAvailability }));
   const valid = pts.filter((p): p is { x: number; y: number; week: number; value: number | null } => p.y != null);
-  const hoveredPt = hover != null ? pts.find((p) => p.week === hover) : null;
 
   return (
-    <div className="relative">
+    <div className="relative" ref={containerRef}>
       <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full">
         <line x1={PADX} x2={W - 10} y1={yFor(100)} y2={yFor(100)} stroke="var(--color-warning)" strokeDasharray="5 4" strokeWidth={1.5} />
         <text x={W - 10} y={yFor(100) - 6} fontSize={10} textAnchor="end" fill="var(--color-warning)">100% target</text>
@@ -380,26 +486,25 @@ function WarehouseAvailabilityChart({ weekly }: { weekly: { week: number; whAvai
             key={p.week}
             cx={p.x}
             cy={p.y}
-            r={hover === p.week ? 7 : 5}
+            r={tooltip?.week === p.week ? 7 : 5}
             fill="var(--color-foreground)"
+            stroke="var(--color-card)"
+            strokeWidth={1.5}
             style={{ cursor: "pointer" }}
-            onMouseEnter={() => setHover(p.week)}
-            onMouseLeave={() => setHover(null)}
+            onMouseEnter={(e) => show(e, { week: p.week, value: p.value })}
+            onMouseLeave={hide}
           />
         ))}
         {weekly.map((w, i) => (
           <text key={w.week} x={xFor(i)} y={H - 4} fontSize={11} textAnchor="middle" fill="var(--color-muted-foreground)">Week {w.week}</text>
         ))}
       </svg>
-      {hoveredPt && (
+      {tooltip && (
         <div
           className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-md border border-border bg-foreground px-2.5 py-1.5 text-xs font-medium text-background shadow-lg"
-          style={{
-            left: `${(xFor(weekly.findIndex((w) => w.week === hover)) / W) * 100}%`,
-            top: `${(yFor(hoveredPt.value ?? 0) / H) * 100 - 2}%`,
-          }}
+          style={{ left: tooltip.left, top: tooltip.top - 6 }}
         >
-          {fmtPercent(hoveredPt.value)} availability
+          {fmtPercent(tooltip.value)} availability
         </div>
       )}
     </div>
