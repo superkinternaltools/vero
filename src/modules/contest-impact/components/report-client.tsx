@@ -500,6 +500,50 @@ function SummaryView({ report }: { report: ContestMonthReport }) {
     <div className="space-y-4">
       <InventorySummarySection report={report} />
       <FullDataTable report={report} />
+      <WeeklySplitCard report={report} />
+    </div>
+  );
+}
+
+/** The approved/poor pool reshuffles week to week as verdicts change —
+ * control isn't part of this pool, and this is the only place that shows
+ * the week-by-week movement rather than just the latest snapshot. */
+function WeeklySplitCard({ report }: { report: ContestMonthReport }) {
+  const splitRows = report.weeklyGroupCounts.map((w) => ({ week: w.week, approved: w.approved, poor: w.poor, total: w.approved + w.poor }));
+  const showSplit = splitRows.some((r) => r.total > 0);
+  if (!showSplit) return null;
+
+  return (
+    <div className="rounded-2xl border border-border bg-card p-5">
+      <h3 className="text-sm font-semibold text-foreground">Approved ⇄ poor, week by week</h3>
+      <p className="mb-3 mt-0.5 text-[11px] text-muted-foreground">
+        The same pool of contest stores reshuffles as verdicts change — control isn&apos;t part of this pool.
+      </p>
+      <div className="space-y-1.5">
+        {splitRows.map((r) => (
+          <div key={r.week} className="flex items-center gap-3">
+            <span className="w-10 shrink-0 text-[11px] text-muted-foreground">Wk {r.week}</span>
+            <div className="flex h-5 flex-1 overflow-hidden rounded-md bg-input">
+              {r.total > 0 && (
+                <>
+                  <div
+                    className="flex items-center justify-center text-[10px] font-medium text-background"
+                    style={{ width: `${(r.approved / r.total) * 100}%`, background: GROUP_COLOR.approved }}
+                  >
+                    {r.approved > 0 ? r.approved : ""}
+                  </div>
+                  <div
+                    className="flex items-center justify-center text-[10px] font-medium text-background"
+                    style={{ width: `${(r.poor / r.total) * 100}%`, background: GROUP_COLOR.poor }}
+                  >
+                    {r.poor > 0 ? r.poor : ""}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
