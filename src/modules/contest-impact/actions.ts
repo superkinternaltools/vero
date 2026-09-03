@@ -9,10 +9,8 @@ import {
   normalizeName,
   getVeroCampaignSyncPreview,
   listCampaignOptions,
-  getContestMonthReport,
-  getOrGenerateContestReport,
 } from "./queries";
-import type { VeroCampaignSyncPreview, ContestReport } from "./queries";
+import type { VeroCampaignSyncPreview } from "./queries";
 import { clearDummyData } from "./seed";
 import { runContestChatTurn } from "./chat";
 import type { ChatTurn } from "./chat";
@@ -367,17 +365,3 @@ export async function sendContestChatMessage(campaignKey: string, month: string,
   return { reply: result.reply };
 }
 
-// ==================== "Is it working?" report ====================
-
-export async function regenerateContestReport(campaignKey: string, month: string): Promise<ContestReport | { error: string }> {
-  await requireAccess("contest_impact");
-
-  const campaigns = await listCampaignOptions();
-  const campaign = campaigns.find((c) => c.key === campaignKey);
-  if (!campaign) return { error: "Unknown campaign." };
-
-  const report = await getContestMonthReport(campaignKey, month);
-  const result = await getOrGenerateContestReport(campaignKey, campaign.label, month, report, { force: true });
-  revalidatePath("/contest-impact");
-  return result;
-}

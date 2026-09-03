@@ -1,10 +1,6 @@
 import { createClient } from "@/core/db/server";
-import { diagnoseContest } from "./diagnosis";
-import { computeReportFingerprint, generateContestReportNarrative } from "./report-ai";
 import { SELL_METRICS } from "./types";
 import type {
-  ContestDiagnosis,
-  ContestReportNarrative,
   NameOption,
   CampaignOption,
   ContestGroup,
@@ -874,71 +870,3 @@ async function getSmartBaseline(
   return { hasBrand: true, brandBaseline: null };
 }
 
-export type ContestReport = { diagnosis: ContestDiagnosis; narrative: ContestReportNarrative };
-
-/** Cached "Is it working?" report for one campaign + month — same fingerprint-
- * and-cache pattern as the headline. The diagnosis (verdict/trend/root cause)
- * is always recomputed fresh from the live report since it's pure/cheap; only
- * the AI narrative is what's cached and reused. */
-export async function getOrGenerateContestReport(
-  campaignKey: string,
-  campaignLabel: string,
-  month: string,
-  report: ContestMonthReport,
-  opts?: { force?: boolean },
-): Promise<ContestReport | { error: string }> {
-  const diagnosis = diagnoseContest(report);
-  const supabase = await createClient();
-  const monthDate = `${month}-01`;
-  const fingerprint = computeReportFingerprint(campaignLabel, month, report, diagnosis);
-
-  if (!opts?.force) {
-    const { data: cached } = await supabase
-      .from("contest_ai_reports")
-      .select("verdict_sentence, mechanism, root_cause, data_fingerprint")
-      .eq("campaign_key", campaignKey)
-      .eq("month", monthDate)
-      .maybeSingle();
-    if (cached && (cached as any).data_fingerprint === fingerprint) {
-      return {
-        diagnosis,
-        narrative: { verdictSentence: (cached as any).verdict_sentence, mechanism: (cached as any).mechanism, rootCause: (cached as any).root_cause },
-      };
-    }
-  }
-
-  const prevMonth = previousMonthKey(month);
-  const { data: prevRow } = await supabase
-    .from("contest_ai_reports")
-    .select("verdict_sentence, mechanism")
-    .eq("campaign_key", campaignKey)
-    .eq("month", `${prevMonth}-01`)
-    .maybeSingle();
-
-  const result = await generateContestReportNarrative({
-    campaignLabel,
-    month,
-    report,
-    diagnosis,
-    previous: prevRow ? { month: prevMonth, verdictSentence: (prevRow as any).verdict_sentence, mechanism: (prevRow as any).mechanism } : null,
-  });
-  if ("error" in result) return result;
-
-  await supabase
-    .from("contest_ai_reports")
-    .upsert(
-      {
-        campaign_key: campaignKey,
-        month: monthDate,
-        verdict: diagnosis.verdict,
-        trend: diagnosis.trend,
-        verdict_sentence: result.verdictSentence,
-        mechanism: result.mechanism,
-        root_cause: result.rootCause,
-        data_fingerprint: fingerprint,
-      },
-      { onConflict: "campaign_key,month" },
-    );
-
-  return { diagnosis, narrative: result };
-}
