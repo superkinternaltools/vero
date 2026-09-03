@@ -513,7 +513,7 @@ function SummaryView({ report, onNavigateToStores }: { report: ContestMonthRepor
  * — each chart/table on the page compares independently now, rather than
  * one setting driving the whole report. */
 function ExecutionGroupsCard({ report, onNavigateToStores }: { report: ContestMonthReport; onNavigateToStores: () => void }) {
-  const [basis, setBasis] = useState<ComparisonBasis>("lastMonth");
+  const basis: ComparisonBasis = "lastMonth";
   const gmv = report.metrics.find((m) => m.key === "gmv")!;
   const sellThrough = report.metrics.find((m) => m.key === "sellThrough");
   const doh = report.metrics.find((m) => m.key === "doh");
@@ -525,15 +525,7 @@ function ExecutionGroupsCard({ report, onNavigateToStores }: { report: ContestMo
 
   return (
     <div className="rounded-2xl border border-border bg-card p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold text-foreground">Execution groups</h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Approved — campaign ran, approved. Poor — campaign ran, not approved. Control — no campaign data at all.
-          </p>
-        </div>
-        <ComparisonToggle basis={basis} onChange={setBasis} />
-      </div>
+      <h3 className="text-sm font-semibold text-foreground">Execution groups</h3>
       <div className="divide-y divide-border">
         {groups.map((g) => {
           const growth = basis === "lastMonth" ? gmv.monthGrowthVsLastMonth[g] : gmv.monthGrowthVsLastYear[g];
@@ -795,13 +787,28 @@ function MetricsView({ report }: { report: ContestMonthReport }) {
 
 function StoresView({ report }: { report: ContestMonthReport }) {
   const [basis, setBasis] = useState<ComparisonBasis>("lastMonth");
+  const [search, setSearch] = useState("");
+  const [groupFilter, setGroupFilter] = useState<Set<ContestGroup>>(new Set(["approved", "poor", "control"]));
+
+  function toggleGroup(g: ContestGroup) {
+    setGroupFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(g)) next.delete(g);
+      else next.add(g);
+      return next;
+    });
+  }
+
   const groupOrder: Record<ContestGroup, number> = { approved: 0, poor: 1, control: 2 };
-  const sorted = [...report.stores].sort((a, b) => {
-    if (a.group !== b.group) return groupOrder[a.group] - groupOrder[b.group];
-    const av = basis === "lastMonth" ? a.gmvGrowthVsLastMonth : a.gmvGrowthVsLastYear;
-    const bv = basis === "lastMonth" ? b.gmvGrowthVsLastMonth : b.gmvGrowthVsLastYear;
-    return (bv ?? -Infinity) - (av ?? -Infinity);
-  });
+  const sorted = [...report.stores]
+    .filter((s) => groupFilter.has(s.group))
+    .filter((s) => s.storeName.toLowerCase().includes(search.trim().toLowerCase()))
+    .sort((a, b) => {
+      if (a.group !== b.group) return groupOrder[a.group] - groupOrder[b.group];
+      const av = basis === "lastMonth" ? a.gmvGrowthVsLastMonth : a.gmvGrowthVsLastYear;
+      const bv = basis === "lastMonth" ? b.gmvGrowthVsLastMonth : b.gmvGrowthVsLastYear;
+      return (bv ?? -Infinity) - (av ?? -Infinity);
+    });
 
   return (
     <div className="rounded-2xl border border-border bg-card">
@@ -816,6 +823,38 @@ function StoresView({ report }: { report: ContestMonthReport }) {
         </div>
         <ComparisonToggle basis={basis} onChange={setBasis} />
       </div>
+      <div className="flex flex-wrap items-center gap-3 border-t border-border p-4">
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search store…"
+          className="h-9 min-w-[180px] flex-1 rounded-lg border border-transparent bg-input px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:bg-card focus:outline-none"
+        />
+        <div className="flex gap-1.5">
+          {(["approved", "poor", "control"] as ContestGroup[]).map((g) => {
+            const active = groupFilter.has(g);
+            return (
+              <button
+                key={g}
+                type="button"
+                onClick={() => toggleGroup(g)}
+                className={cn(
+                  "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+                  active ? "border-transparent text-background" : "border-border text-muted-foreground hover:text-foreground",
+                )}
+                style={active ? { background: GROUP_COLOR[g] } : undefined}
+              >
+                <span className="h-1.5 w-1.5 rounded-full" style={{ background: active ? "var(--color-background)" : GROUP_COLOR[g] }} />
+                {GROUP_LABELS[g]}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      {sorted.length === 0 && (
+        <p className="border-t border-border p-6 text-center text-xs text-muted-foreground">No stores match these filters.</p>
+      )}
       <div className="max-h-[600px] overflow-y-auto">
         {sorted.map((s) => {
           const growth = basis === "lastMonth" ? s.gmvGrowthVsLastMonth : s.gmvGrowthVsLastYear;
