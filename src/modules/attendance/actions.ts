@@ -7,6 +7,7 @@ import { getCurrentProfile } from "@/core/auth/session";
 import { getAccess } from "@/core/auth/access";
 import { distanceMeters } from "@/core/lib/geo";
 import type { ShiftMode, ShiftWindow } from "./types";
+import { weekStartsForMonth } from "./queries";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Result = { error?: string };
@@ -296,6 +297,77 @@ export async function copyWeekForUser(
     })),
     { onConflict: "user_id,work_date,store_id" },
   );
+  if (error) return { error: error.message };
+
+  revalidatePath("/attendance/rosters");
+  return { copied: rows.length };
+}
+
+/** Copies every shift, for every member of the roster, from one calendar
+ * month onto another — week N of the source month maps onto week N of the
+ * target month (same weekday-of-week offset preserved, same as
+ * copyWeekForUser), so this is exactly "run copyWeekForUser for every
+ * member across every mapped week", just batched into one fetch + one
+ * upsert instead of an N-members × M-weeks round-trip loop. A week that
+ * only exists in the source month (e.g. a 5th week) has nowhere to land and
+ * is silently skipped, same as any date that falls outside the roster's own
+ * range or on a holiday. */
+export async function copyMonthForRoster(
+  rosterId: string,
+  fromMonthKey: string,
+  toMonthKey: string,
+): Promise<Result & { copied?: number }> {
+  if (!(await requireAdmin())) return { error: "Not authorized." };
+  if (fromMonthKey === toMonthKey) return { error: "Source and target month are the same." };
+  const supabase = await createClient();
+
+  const { data: roster } = await supabase
+    .from("attendance_rosters")
+    .select("start_date, end_date, holiday_dates")
+    .eq("id", rosterId)
+    .maybeSingle();
+  if (!roster) return { error: "Roster not found." };
+  const r = roster as any;
+  const holidays = new Set<string>((r.holiday_dates ?? []) as string[]);
+  const rStart = r.start_date as string;
+  const rEnd = r.end_date as string;
+
+  const fromWeeks = weekStartsForMonth(fromMonthKey);
+  const toWeeks = weekStartsForMonth(toMonthKey);
+  const fromRangeStart = fromWeeks[0];
+  const fromRangeEnd = addDaysISO(fromWeeks[fromWeeks.length - 1], 6);
+
+  const { data: assigns, error: fetchError } = await supabase
+    .from("attendance_assignments")
+    .select("user_id, work_date, preset_id, mode, windows, store_id")
+    .eq("roster_id", rosterId)
+    .gte("work_date", fromRangeStart)
+    .lte("work_date", fromRangeEnd);
+  if (fetchError) return { error: fetchError.message };
+  if (!assigns || assigns.length === 0) return { error: `No shifts found in that month to copy.` };
+
+  const rows = (assigns as any[])
+    .map((a) => {
+      const weekIdx = fromWeeks.findIndex((ws) => a.work_date >= ws && a.work_date <= addDaysISO(ws, 6));
+      if (weekIdx === -1 || weekIdx >= toWeeks.length) return null;
+      const dayOffset = Math.round((Date.parse(a.work_date) - Date.parse(fromWeeks[weekIdx])) / 86_400_000);
+      const workDate = addDaysISO(toWeeks[weekIdx], dayOffset);
+      if (workDate < rStart || workDate > rEnd || holidays.has(workDate)) return null;
+      return {
+        roster_id: rosterId,
+        user_id: a.user_id,
+        work_date: workDate,
+        preset_id: a.preset_id,
+        mode: a.mode,
+        windows: a.windows,
+        store_id: a.store_id,
+      };
+    })
+    .filter((r): r is NonNullable<typeof r> => r !== null);
+
+  if (rows.length === 0) return { error: "Nothing could be copied — the target month may be fully outside this roster's date range." };
+
+  const { error } = await supabase.from("attendance_assignments").upsert(rows, { onConflict: "user_id,work_date,store_id" });
   if (error) return { error: error.message };
 
   revalidatePath("/attendance/rosters");

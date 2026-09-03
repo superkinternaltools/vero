@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, Plus, Trash2, Sliders, Upload, X } from "lucide-react";
+import { ChevronDown, Plus, Trash2, Sliders, Upload, Copy, X } from "lucide-react";
 import { Button } from "@/core/ui/button";
 import { Input } from "@/core/ui/input";
 import { Modal } from "@/core/ui/modal";
@@ -21,6 +21,7 @@ import {
   clearAssignment,
   applyWeek,
   copyWeekForUser,
+  copyMonthForRoster,
   clearWeek,
   savePreset,
   deletePreset,
@@ -44,6 +45,15 @@ function fmtDay(iso: string): string {
 }
 function fmtDayShort(iso: string): string {
   return new Date(iso + "T00:00:00Z").toLocaleDateString("en-IN", { weekday: "short" });
+}
+
+function prevMonthKey(monthKey: string): string {
+  const [y, m] = monthKey.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 2, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+function fmtMonthKey(monthKey: string): string {
+  return new Date(`${monthKey}-01T00:00:00Z`).toLocaleDateString("en-IN", { month: "short", year: "numeric", timeZone: "UTC" });
 }
 
 /** Every calendar month the roster spans, for the month switcher. */
@@ -240,6 +250,25 @@ export function RostersClient({
   function changeMonth(value: string) {
     if (!grid) return;
     router.push(`/attendance/rosters?roster=${grid.roster.id}&month=${value}`);
+  }
+
+  function copyFromLastMonth() {
+    if (!grid) return;
+    const from = prevMonthKey(grid.monthKey);
+    const fromLabel = fmtMonthKey(from);
+    const toLabel = fmtMonthKey(grid.monthKey);
+    if (
+      !window.confirm(
+        `Copy every shift from ${fromLabel} onto ${toLabel} for everyone in this roster? This overwrites anything already set in ${toLabel} on days a shift gets copied onto.`,
+      )
+    )
+      return;
+    start(async () => {
+      const res = await copyMonthForRoster(grid.roster.id, from, grid.monthKey);
+      if (res.error) { window.alert(res.error); return; }
+      window.alert(`Copied ${res.copied} shift(s) from ${fromLabel}.`);
+      router.refresh();
+    });
   }
 
   // Per-(person, week) "same all week" quick-set values.
@@ -592,6 +621,9 @@ export function RostersClient({
                 {grid.roster.overtimeCapHours != null && (
                   <span className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">OT cap {grid.roster.overtimeCapHours}h</span>
                 )}
+                <Button variant="outline" size="md" onClick={copyFromLastMonth} disabled={pending}>
+                  <Copy className="h-4 w-4" /> Copy {fmtMonthKey(prevMonthKey(grid.monthKey))}
+                </Button>
                 <Button variant="outline" size="md" onClick={() => { setBulkText(""); setPreview(null); setBulkOpen(true); }}>
                   <Upload className="h-4 w-4" /> Bulk upload
                 </Button>

@@ -282,7 +282,7 @@ function mondayOnOrBefore(iso: string): string {
 }
 
 /** Every Monday-starting week that overlaps the given calendar month. */
-function weekStartsForMonth(monthKey: string): string[] {
+export function weekStartsForMonth(monthKey: string): string[] {
   const [y, m] = monthKey.split("-").map(Number);
   const firstOfMonth = `${monthKey}-01`;
   const lastOfMonth = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
