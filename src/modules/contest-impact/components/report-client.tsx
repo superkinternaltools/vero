@@ -752,101 +752,6 @@ function StockPushStatRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-type MoveDiagnosis = {
-  group: ContestGroup;
-  week: number;
-  gmvChangePct: number;
-  stockChangePct: number | null;
-  kind: "supply" | "demand" | "mixed";
-};
-
-function pctChange(curr: number | null, prev: number | null): number | null {
-  if (curr == null || prev == null || prev === 0) return null;
-  return ((curr - prev) / Math.abs(prev)) * 100;
-}
-
-/** Compares each week's GMV move to that same week's in-store-value move, for
- * approved and poor stores — a GMV drop that tracks a stock drop is a supply
- * story, not an execution one; a GMV drop with flat stock is the opposite. */
-function diagnoseWeeklyMoves(report: ContestMonthReport): MoveDiagnosis[] {
-  const gmv = report.metrics.find((m) => m.key === "gmv");
-  const stock = report.metrics.find((m) => m.key === "inStoreValue");
-  if (!gmv || !stock) return [];
-
-  const out: MoveDiagnosis[] = [];
-  for (const g of ["approved", "poor"] as ContestGroup[]) {
-    for (let i = 1; i < gmv.weekly.length; i++) {
-      const prevWeek = gmv.weekly[i - 1];
-      const currWeek = gmv.weekly[i];
-      const gmvChangePct = pctChange(currWeek.value[g], prevWeek.value[g]);
-      if (gmvChangePct == null || Math.abs(gmvChangePct) < 8) continue;
-
-      const stockPrev = stock.weekly.find((w) => w.week === prevWeek.week);
-      const stockCurr = stock.weekly.find((w) => w.week === currWeek.week);
-      const stockChangePct = pctChange(stockCurr?.value[g] ?? null, stockPrev?.value[g] ?? null);
-
-      let kind: MoveDiagnosis["kind"] = "mixed";
-      if (stockChangePct != null) {
-        const sameDirection = Math.sign(stockChangePct) === Math.sign(gmvChangePct);
-        const stockMoved = Math.abs(stockChangePct) >= 8;
-        if (sameDirection && stockMoved) kind = "supply";
-        else if (!stockMoved) kind = "demand";
-      }
-      out.push({ group: g, week: currWeek.week, gmvChangePct, stockChangePct, kind });
-    }
-  }
-  return out.sort((a, b) => Math.abs(b.gmvChangePct) - Math.abs(a.gmvChangePct));
-}
-
-const DIAGNOSIS_COLOR: Record<MoveDiagnosis["kind"], string> = {
-  supply: "var(--color-warning)",
-  demand: "var(--color-danger)",
-  mixed: "var(--color-muted-foreground)",
-};
-const DIAGNOSIS_LABEL: Record<MoveDiagnosis["kind"], string> = {
-  supply: "Supply-driven",
-  demand: "Execution/demand-driven",
-  mixed: "Mixed signal",
-};
-
-function WeeklyMoveDiagnosis({ report }: { report: ContestMonthReport }) {
-  const moves = diagnoseWeeklyMoves(report);
-  if (!moves.length) return null;
-
-  return (
-    <div className="rounded-2xl border border-border bg-card p-5">
-      <h3 className="mb-4 text-sm font-semibold text-foreground">Why GMV moved</h3>
-      <div className="space-y-2.5">
-        {moves.map((mv, i) => (
-          <div
-            key={i}
-            className="flex items-start gap-3 rounded-xl border-l-[3px] bg-input p-3"
-            style={{ borderLeftColor: DIAGNOSIS_COLOR[mv.kind] }}
-          >
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-semibold" style={{ color: DIAGNOSIS_COLOR[mv.kind] }}>
-                Week {mv.week} · {GROUP_LABELS[mv.group]} · {DIAGNOSIS_LABEL[mv.kind]}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                GMV {mv.gmvChangePct >= 0 ? "rose" : "fell"} <span className="font-medium text-foreground">{fmtGrowth(mv.gmvChangePct, "number")}</span>{" "}
-                vs the prior week, while in-store value{" "}
-                {mv.stockChangePct == null ? (
-                  "had no comparable data"
-                ) : (
-                  <>
-                    {mv.stockChangePct >= 0 ? "rose" : "fell"} <span className="font-medium text-foreground">{fmtGrowth(mv.stockChangePct, "number")}</span>
-                  </>
-                )}
-                .
-              </p>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 /** One metric's card, with its own compare-against toggle — each graph on
  * the page now compares independently rather than sharing one setting. */
 function MetricCard({ metric }: { metric: MetricSeries }) {
@@ -889,10 +794,6 @@ function MetricsView({ report }: { report: ContestMonthReport }) {
       {report.metrics.map((m) => (
         <MetricCard key={m.key} metric={m} />
       ))}
-
-      <WeeklyMoveDiagnosis report={report} />
-
-      <FullDataTable report={report} />
     </div>
   );
 }
