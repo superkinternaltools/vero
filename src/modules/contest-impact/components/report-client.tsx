@@ -689,46 +689,65 @@ function FullDataTable({ report }: { report: ContestMonthReport }) {
           </tr>
         </tbody>
       </table>
-      <StockPushCaveat report={report} />
+      <StockPushComparison report={report} />
     </div>
   );
 }
 
 /** Raw GMV alone can't tell you whether approved stores actually converted
  * better, or just held more stock — a store with 3x the stock will often
- * post higher GMV even with mediocre execution. Sell-through (GMV per rupee
- * of stock on shelf) is the number that isolates conversion from stock
- * volume, so that's what decides this: only flags when approved genuinely
- * outsells control AND does so with a bigger stock lift than sales lift —
- * i.e. sell-through is actually lower for approved despite the bigger
- * headline number. */
-function StockPushCaveat({ report }: { report: ContestMonthReport }) {
+ * post higher GMV even with mediocre execution. These are the three numbers
+ * that isolate that: how much more (or less) approved sold, how much more
+ * (or less) stock it carried to get there, and sell-through (GMV per rupee
+ * of stock) — the one that's actually apples-to-apples regardless of how
+ * much stock either group had. Shown against both other groups since a
+ * stock-driven story can show up against one and not the other. */
+function StockPushComparison({ report }: { report: ContestMonthReport }) {
   const gmv = report.metrics.find((m) => m.key === "gmv");
   const stock = report.metrics.find((m) => m.key === "inStoreValue");
   const sellThrough = report.metrics.find((m) => m.key === "sellThrough");
   if (!gmv || !stock || !sellThrough) return null;
 
   const gmvA = gmv.monthAvg.approved;
-  const gmvC = gmv.monthAvg.control;
   const stockA = stock.monthAvg.approved;
-  const stockC = stock.monthAvg.control;
   const stA = sellThrough.monthAvg.approved;
-  const stC = sellThrough.monthAvg.control;
-  if (gmvA == null || gmvC == null || gmvC <= 0 || stockA == null || stockC == null || stockC <= 0 || stA == null || stC == null) return null;
 
-  const gmvRatio = gmvA / gmvC;
-  const stockRatio = stockA / stockC;
-  if (gmvRatio <= 1 || stA >= stC) return null;
+  const groups: { label: string; group: ContestGroup }[] = [
+    { label: "vs Control Group", group: "control" },
+    { label: "vs Poor Group", group: "poor" },
+  ];
 
   return (
-    <div className="m-4 mt-3 flex items-start gap-3 rounded-xl border border-warning/40 border-l-[3px] border-l-warning bg-warning/5 p-3.5">
-      <span className="mt-0.5 text-base">⚠️</span>
-      <p className="text-[12.5px] leading-relaxed text-foreground">
-        <b className="text-warning">Stock-push caveat:</b> Approved execution sold <b className="text-warning">{gmvRatio.toFixed(1)}×</b> control&apos;s
-        GMV, but carried <b className="text-warning">{stockRatio.toFixed(1)}×</b> control&apos;s in-store value — its sell-through (
-        {fmtPercent(stA)}) is actually <b className="text-warning">lower</b> than control&apos;s ({fmtPercent(stC)}). Some of that extra sales is likely
-        just more stock on the shelf, not better execution.
-      </p>
+    <div className="m-4 mt-3 grid gap-3 sm:grid-cols-2">
+      {groups.map(({ label, group }) => {
+        const gmvOther = gmv.monthAvg[group];
+        const stockOther = stock.monthAvg[group];
+        const stOther = sellThrough.monthAvg[group];
+        const gmvRatio = gmvA != null && gmvOther ? gmvA / gmvOther : null;
+        const stockRatio = stockA != null && stockOther ? stockA / stockOther : null;
+        return (
+          <div key={group} className="rounded-xl bg-input p-3.5">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
+            <div className="mt-2 space-y-1.5">
+              <StockPushStatRow label="GMV" value={gmvRatio != null ? `${gmvRatio.toFixed(1)}×` : "no data"} />
+              <StockPushStatRow label="In-store value" value={stockRatio != null ? `${stockRatio.toFixed(1)}×` : "no data"} />
+              <StockPushStatRow
+                label="Sell-through"
+                value={stA != null && stOther != null ? `${fmtPercent(stA)} vs ${fmtPercent(stOther)}` : "no data"}
+              />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function StockPushStatRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between text-xs">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="font-medium tabular-nums text-foreground">{value}</span>
     </div>
   );
 }
