@@ -815,11 +815,7 @@ function WeeklyMoveDiagnosis({ report }: { report: ContestMonthReport }) {
 
   return (
     <div className="rounded-2xl border border-border bg-card p-5">
-      <h3 className="text-sm font-semibold text-foreground">Why GMV moved</h3>
-      <p className="mb-4 mt-1 text-xs text-muted-foreground">
-        Every week-on-week GMV swing of 8% or more, checked against that same week&apos;s in-store value — stock moving with GMV points to a supply
-        cause, GMV moving while stock held points to execution or demand.
-      </p>
+      <h3 className="mb-4 text-sm font-semibold text-foreground">Why GMV moved</h3>
       <div className="space-y-2.5">
         {moves.map((mv, i) => (
           <div
