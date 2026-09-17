@@ -19,6 +19,7 @@ import {
   GitCompare,
   FileDown,
   LogOut,
+  Wallet,
 } from "lucide-react";
 import { signOutAction } from "@/modules/auth/actions";
 import { cn } from "@/core/lib/utils";
@@ -43,6 +44,7 @@ const groups: Group[] = [
       { key: "analysis", name: "Analysis", href: "/analysis", icon: BarChart3 },
       { key: "leaderboard", name: "Leaderboard", href: "/leaderboard", icon: Trophy },
       { key: "contest_impact", name: "Contest Impact", href: "/contest-impact", icon: GitCompare },
+      { key: "store_earnings", name: "Store Earnings", href: "/store-earnings", icon: Wallet },
     ],
   },
   {

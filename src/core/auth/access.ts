@@ -52,6 +52,19 @@ export async function getAccess(): Promise<Access | null> {
         .find((l) => !!l) ?? null;
   }
 
+  // Store Earnings is granted by store assignment, not role — anyone with
+  // stores under them (Store Partner, SAE, or any other job title) sees
+  // their own earnings automatically, regardless of the role-permission
+  // matrix. A role can still be granted it explicitly above; this only adds
+  // it when that hasn't already happened.
+  if (!allowed.has("store_earnings")) {
+    const { count } = await supabase
+      .from("user_stores")
+      .select("store_id", { count: "exact", head: true })
+      .eq("user_id", profile.id);
+    if ((count ?? 0) > 0) allowed.add("store_earnings");
+  }
+
   // landing must point at an allowed module
   const landingKey = (landing ?? "/dashboard").replace(/^\//, "");
   const safeLanding = allowed.has(landingKey) ? `/${landingKey}` : "/dashboard";

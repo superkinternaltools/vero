@@ -12,6 +12,7 @@ export const PERMISSION_KEYS = [
   { key: "attendance", label: "Attendance" },
   { key: "attendance_punch", label: "Attendance Punch" },
   { key: "stores", label: "Stores" },
+  { key: "store_earnings", label: "Store Earnings" },
   { key: "users", label: "Users" },
   { key: "org", label: "Roles & Departments" },
 ] as const;
