@@ -54,3 +54,27 @@ export type ExportGroupRow = {
   aiScore: number | null;
   recordedTierLabel: string | null;
 };
+
+/** One row per task — who sent its photo, and what it pays under normal
+ * rules. Backs the "Payout split by who submitted" section. The split
+ * itself (share %, how Store Managers count) is applied in the browser so
+ * it can be adjusted without reloading. */
+export type SubmitterPayoutRow = {
+  taskId: string;
+  campaignId: string;
+  campaignName: string;
+  storeCode: string;
+  storeName: string;
+  week: number;
+  submitterName: string | null;
+  /** Job title name of whoever sent the photo; null if nobody has yet, or they have no title. */
+  submitterTitle: string | null;
+  /** "none" = no submission for this task yet. */
+  verdict: "approved" | "rejected" | "pending" | "none";
+  tierLabel: string | null;
+  /** Payout under the normal rules (tier-aware); 0 if payout isn't enabled. */
+  fullPayout: number;
+  /** The campaign's payout amount for this task — both the potential and the
+   * base an SAE/ASM share is taken from; 0 if payout isn't enabled. */
+  baseAmount: number;
+};

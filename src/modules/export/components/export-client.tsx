@@ -6,7 +6,9 @@ import { Download, Images } from "lucide-react";
 import { Button } from "@/core/ui/button";
 import { MultiSelect } from "@/core/ui/multi-select";
 import { getPhotoManifest } from "../actions";
-import type { CampaignOption, DepartmentOption, ExportGroupRow, PhotoExportItem } from "../types";
+import { downloadCsv, money } from "./csv";
+import { PayoutSplitSection } from "./payout-split-section";
+import type { CampaignOption, DepartmentOption, ExportGroupRow, PhotoExportItem, SubmitterPayoutRow } from "../types";
 
 /** File System Access API — Chrome and Edge only, so it isn't in the TS lib
  * types. Only the bits used below are declared. */
@@ -32,17 +34,6 @@ function photoFileName(it: PhotoExportItem): string {
   return `${safeName(it.campaignName)} - ${it.month} W${it.week}_${safeName(it.verdict)}${suffix}.${extFromUrl(it.url)}`;
 }
 
-function downloadCsv(filename: string, header: string[], rows: (string | number)[][]) {
-  const lines = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","));
-  const blob = new Blob([[header.join(","), ...lines].join("\n")], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
 function monthLabel(month: string): string {
   return new Date(`${month}-01T00:00:00Z`).toLocaleDateString("en-IN", {
     month: "long",
@@ -51,20 +42,18 @@ function monthLabel(month: string): string {
   });
 }
 
-function money(n: number): string {
-  return `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
-}
-
 export function ExportClient({
   month,
   campaigns,
   departments,
   rows,
+  splitRows,
 }: {
   month: string;
   campaigns: CampaignOption[];
   departments: DepartmentOption[];
   rows: ExportGroupRow[];
+  splitRows: SubmitterPayoutRow[];
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -97,6 +86,7 @@ export function ExportClient({
   }, [campaigns, campaignIds, activeOnly, departmentIds]);
 
   const visibleRows = useMemo(() => rows.filter((r) => visibleCampaignIds.has(r.campaignId)), [rows, visibleCampaignIds]);
+  const visibleSplitRows = useMemo(() => splitRows.filter((r) => visibleCampaignIds.has(r.campaignId)), [splitRows, visibleCampaignIds]);
 
   const totalExpected = visibleRows.reduce((s, r) => s + r.expectedPayout, 0);
   const totalActual = visibleRows.reduce((s, r) => s + r.actualPayout, 0);
@@ -107,6 +97,27 @@ export function ExportClient({
       `payouts-${month}.csv`,
       ["Store code", "Store name", "Campaign", "Month", "Week", "Assigned", "Approved", "Payout amount"],
       visibleRows.map((r) => [r.storeCode, r.storeName, r.campaignName, r.month, r.week, r.assignedCount, r.approvedCount, r.actualPayout.toFixed(2)]),
+    );
+  }
+
+  // One row per store, summed across every campaign and week in scope.
+  // Keyed by store code — two stores can share a display name.
+  const storeTotals = useMemo(() => {
+    const byStore = new Map<string, { storeName: string; payout: number; potential: number }>();
+    for (const r of visibleRows) {
+      const t = byStore.get(r.storeCode) ?? { storeName: r.storeName, payout: 0, potential: 0 };
+      t.payout += r.actualPayout;
+      t.potential += r.expectedPayout;
+      byStore.set(r.storeCode, t);
+    }
+    return [...byStore.values()].sort((a, b) => a.storeName.localeCompare(b.storeName));
+  }, [visibleRows]);
+
+  function exportStorePayouts() {
+    downloadCsv(
+      `store-payouts-${month}.csv`,
+      ["StoreName", "Payout", "PotentialPayout"],
+      storeTotals.map((s) => [s.storeName, Math.round(s.payout), Math.round(s.potential)]),
     );
   }
 
@@ -307,13 +318,23 @@ export function ExportClient({
         </p>
       )}
 
-      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-2xl border border-border bg-card p-5">
           <h3 className="text-sm font-semibold text-foreground">Overall payouts</h3>
           <p className="mt-1 text-xs text-muted-foreground">Per store, per week, broken out by campaign.</p>
           <p className="mt-4 text-2xl font-bold tabular-nums text-foreground">{money(totalActual)}</p>
           <p className="text-xs text-muted-foreground">{visibleRows.length} row{visibleRows.length === 1 ? "" : "s"}</p>
           <Button className="mt-4 w-full" variant="outline" onClick={exportPayout} disabled={visibleRows.length === 0}>
+            <Download className="h-4 w-4" /> Export CSV
+          </Button>
+        </div>
+
+        <div className="rounded-2xl border border-border bg-card p-5">
+          <h3 className="text-sm font-semibold text-foreground">Store payouts</h3>
+          <p className="mt-1 text-xs text-muted-foreground">One row per store — actual payout vs potential if fully approved.</p>
+          <p className="mt-4 text-2xl font-bold tabular-nums text-foreground">{storeTotals.length}</p>
+          <p className="text-xs text-muted-foreground">store{storeTotals.length === 1 ? "" : "s"} in scope</p>
+          <Button className="mt-4 w-full" variant="outline" onClick={exportStorePayouts} disabled={storeTotals.length === 0}>
             <Download className="h-4 w-4" /> Export CSV
           </Button>
         </div>
@@ -370,6 +391,8 @@ export function ExportClient({
           </Button>
         </div>
       </div>
+
+      <PayoutSplitSection month={month} rows={visibleSplitRows} />
     </div>
   );
 }

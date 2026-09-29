@@ -1,6 +1,7 @@
+import { cache } from "react";
 import { createClient } from "@/core/db/server";
 import { createAdminClient } from "@/core/db/admin";
-import type { CampaignOption, DepartmentOption, ExportGroupRow } from "./types";
+import type { CampaignOption, DepartmentOption, ExportGroupRow, SubmitterPayoutRow } from "./types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -127,11 +128,11 @@ async function fetchAllRows(
   return results;
 }
 
-/** Payout/submission data spans every store — reads via the service-role
- * client so it's never scoped down by a viewer's own store/RLS. Groups tasks
- * by (campaign, store, week); a "week" can hold more than one task for a
- * daily-frequency campaign. */
-export async function getExportGroups(month: string): Promise<ExportGroupRow[]> {
+/** A month's tasks plus the latest submission for each. Payout/submission
+ * data spans every store, so it reads via the service-role client and is
+ * never scoped down by a viewer's own store/RLS. Wrapped in cache() so the
+ * Export page's two reports share one load per request. */
+const loadMonth = cache(async (month: string): Promise<{ T: any[]; subByTask: Map<string, any> }> => {
   const admin = createAdminClient();
   const { start, end } = monthRange(month);
 
@@ -157,7 +158,7 @@ export async function getExportGroups(month: string): Promise<ExportGroupRow[]> 
     const subs = await fetchAllRows((from, to) =>
       admin
         .from("submissions")
-        .select("task_id, campaign_id, human_verdict, ai_verdict, payout_tier_label, reviewer_score, ai_score, created_at")
+        .select("task_id, campaign_id, submitted_by, human_verdict, ai_verdict, payout_tier_label, reviewer_score, ai_score, created_at")
         .in("campaign_id", campaignIds)
         .order("created_at", { ascending: false })
         .range(from, to),
@@ -166,6 +167,62 @@ export async function getExportGroups(month: string): Promise<ExportGroupRow[]> 
       if (s.task_id && !subByTask.has(s.task_id)) subByTask.set(s.task_id, s);
     }
   }
+  return { T, subByTask };
+});
+
+/** One row per task with who sent its photo — see SubmitterPayoutRow. Uses
+ * the same latest-submission-per-task and resolveTaskVerdict() as
+ * getExportGroups, so fullPayout here always agrees with the other reports. */
+export async function getSubmitterPayoutRows(month: string): Promise<SubmitterPayoutRow[]> {
+  const { T, subByTask } = await loadMonth(month);
+
+  const submitterIds = [...new Set([...subByTask.values()].map((s) => s.submitted_by as string | null).filter((id): id is string => !!id))];
+  const submitters = new Map<string, { name: string; title: string | null }>();
+  if (submitterIds.length) {
+    const admin = createAdminClient();
+    for (let i = 0; i < submitterIds.length; i += 200) {
+      const { data, error } = await admin
+        .from("profiles")
+        .select("id, display_name, email, job_titles ( name )")
+        .in("id", submitterIds.slice(i, i + 200));
+      if (error) console.error("[export] submitter lookup failed:", error);
+      for (const p of (data as any[]) ?? []) {
+        submitters.set(p.id, { name: p.display_name || p.email || "—", title: p.job_titles?.name ?? null });
+      }
+    }
+  }
+
+  const rows: SubmitterPayoutRow[] = T.map((t) => {
+    const sub = subByTask.get(t.id);
+    const payoutEnabled = t.campaigns?.payout_enabled ?? false;
+    const baseAmount = payoutEnabled ? Number(t.campaigns?.payout_amount ?? 0) : 0;
+    const r = resolveTaskVerdict(t, sub);
+    const verdict: SubmitterPayoutRow["verdict"] = !sub ? "none" : r.pct == null ? "pending" : r.pct === 0 ? "rejected" : "approved";
+    const who = sub?.submitted_by ? submitters.get(sub.submitted_by) : undefined;
+    return {
+      taskId: t.id,
+      campaignId: t.campaign_id,
+      campaignName: t.campaigns?.name ?? "—",
+      storeCode: t.stores?.code ?? "—",
+      storeName: t.stores?.name ?? "—",
+      week: weekOfMonth(t.due_date),
+      submitterName: who?.name ?? null,
+      submitterTitle: who?.title ?? null,
+      verdict,
+      tierLabel: t.campaigns?.payout_model === "tiered" && verdict === "approved" ? r.label : null,
+      fullPayout: r.pct != null ? (r.pct / 100) * baseAmount : 0,
+      baseAmount,
+    };
+  });
+
+  rows.sort((a, b) => a.storeName.localeCompare(b.storeName) || a.campaignName.localeCompare(b.campaignName) || a.week - b.week);
+  return rows;
+}
+
+/** Groups tasks by (campaign, store, week); a "week" can hold more than one
+ * task for a daily-frequency campaign. */
+export async function getExportGroups(month: string): Promise<ExportGroupRow[]> {
+  const { T, subByTask } = await loadMonth(month);
 
   type Group = {
     campaignId: string;
