@@ -56,7 +56,8 @@ export type ExportGroupRow = {
 };
 
 /** One row per task — who sent its photo, and what it pays under normal
- * rules. Backs the "Payout split by who submitted" section. The split
+ * rules. Backs the "Payout split by who submitted" section, which divides
+ * that payout between the store and the SAE/ASM who sent it. The split
  * itself (share %, how Store Managers count) is applied in the browser so
  * it can be adjusted without reloading. */
 export type SubmitterPayoutRow = {
@@ -66,6 +67,7 @@ export type SubmitterPayoutRow = {
   storeCode: string;
   storeName: string;
   week: number;
+  submitterId: string | null;
   submitterName: string | null;
   /** Job title name of whoever sent the photo; null if nobody has yet, or they have no title. */
   submitterTitle: string | null;

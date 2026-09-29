@@ -206,6 +206,7 @@ export async function getSubmitterPayoutRows(month: string): Promise<SubmitterPa
       storeCode: t.stores?.code ?? "—",
       storeName: t.stores?.name ?? "—",
       week: weekOfMonth(t.due_date),
+      submitterId: sub?.submitted_by ?? null,
       submitterName: who?.name ?? null,
       submitterTitle: who?.title ?? null,
       verdict,
