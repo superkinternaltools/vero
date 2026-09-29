@@ -80,13 +80,19 @@ export function PayoutSplitSection({ month, rows, jobTitles }: { month: string; 
       const partnerShare = kind === "authorized" ? (amount * pct) / 100 : amount;
       const senderShare = amount - partnerShare;
 
-      const sender = r.submitterTitle ?? "someone with no job title";
+      // Two separate steps, shown separately: what the photo is worth (tier %
+      // of the payout amount), then who receives that (the split %).
+      const tierPct = r.baseAmount > 0 ? Math.round((amount / r.baseAmount) * 100) : 0;
+      const worth = r.tierLabel
+        ? `${r.tierLabel} = ${tierPct}% of ${money(r.baseAmount)} = ${exact(amount)}`
+        : `Worth ${exact(amount)}`;
+      const sender = r.submitterTitle ?? "Someone with no job title";
       let rule: string;
       if (r.verdict === "rejected") rule = "Rejected · nobody is paid";
       else if (r.verdict === "pending") rule = "Awaiting review · nothing paid yet";
-      else if (kind === "partner") rule = r.tierLabel ? `Store Partner sent · 100% (tier ${r.tierLabel})` : "Store Partner sent · 100%";
-      else if (kind === "authorized") rule = `Authorized sender · Store Partner ${pct}%, sender ${senderPct}% of ${money(amount)}`;
-      else rule = `${sender} isn't an authorized sender · Store Partner gets 100%`;
+      else if (kind === "partner") rule = `${worth} → Store Partner sent, gets 100%`;
+      else if (kind === "authorized") rule = `${worth} → authorized sender: Store Partner ${pct}%, sender ${senderPct}%`;
+      else rule = `${worth} → ${sender} isn't an authorized sender, Store Partner gets 100%`;
 
       if (kind === "authorized") {
         s.split += partnerShare;
@@ -335,6 +341,12 @@ export function PayoutSplitSection({ month, rows, jobTitles }: { month: string; 
       </div>
     </section>
   );
+}
+
+/** Rupees with paise when there are any (₹93.75), so a rounded ₹94 in the
+ * amount column can be traced back to its exact value. */
+function exact(n: number): string {
+  return `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 }
 
 function Stat({ label, value, sub }: { label: string; value: string; sub: string }) {
