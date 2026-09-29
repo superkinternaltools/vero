@@ -37,6 +37,12 @@ export async function listDepartmentOptions(): Promise<DepartmentOption[]> {
   return (data as DepartmentOption[]) ?? [];
 }
 
+export async function listJobTitleOptions(): Promise<string[]> {
+  const supabase = await createClient();
+  const { data } = await supabase.from("job_titles").select("name").order("name");
+  return ((data as any[]) ?? []).map((j) => j.name as string);
+}
+
 export async function listCampaignOptions(): Promise<CampaignOption[]> {
   const supabase = await createClient();
   const { data } = await supabase

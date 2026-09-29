@@ -1,5 +1,11 @@
 import { requireAdmin } from "@/core/auth/session";
-import { listCampaignOptions, listDepartmentOptions, getExportGroups, getSubmitterPayoutRows } from "@/modules/export/queries";
+import {
+  listCampaignOptions,
+  listDepartmentOptions,
+  listJobTitleOptions,
+  getExportGroups,
+  getSubmitterPayoutRows,
+} from "@/modules/export/queries";
 import { ExportClient } from "@/modules/export/components/export-client";
 
 function currentMonth(): string {
@@ -16,12 +22,22 @@ export default async function ExportPage({
   const sp = await searchParams;
   const month = sp.month && /^\d{4}-\d{2}$/.test(sp.month) ? sp.month : currentMonth();
 
-  const [campaigns, departments, rows, splitRows] = await Promise.all([
+  const [campaigns, departments, jobTitles, rows, splitRows] = await Promise.all([
     listCampaignOptions(),
     listDepartmentOptions(),
+    listJobTitleOptions(),
     getExportGroups(month),
     getSubmitterPayoutRows(month),
   ]);
 
-  return <ExportClient month={month} campaigns={campaigns} departments={departments} rows={rows} splitRows={splitRows} />;
+  return (
+    <ExportClient
+      month={month}
+      campaigns={campaigns}
+      departments={departments}
+      jobTitles={jobTitles}
+      rows={rows}
+      splitRows={splitRows}
+    />
+  );
 }

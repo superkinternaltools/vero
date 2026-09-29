@@ -46,12 +46,14 @@ export function ExportClient({
   month,
   campaigns,
   departments,
+  jobTitles,
   rows,
   splitRows,
 }: {
   month: string;
   campaigns: CampaignOption[];
   departments: DepartmentOption[];
+  jobTitles: string[];
   rows: ExportGroupRow[];
   splitRows: SubmitterPayoutRow[];
 }) {
@@ -392,7 +394,7 @@ export function ExportClient({
         </div>
       </div>
 
-      <PayoutSplitSection month={month} rows={visibleSplitRows} />
+      <PayoutSplitSection month={month} rows={visibleSplitRows} jobTitles={jobTitles} />
     </div>
   );
 }
