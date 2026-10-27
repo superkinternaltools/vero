@@ -9,7 +9,7 @@ export function StorePicker({
   selected,
   onChange,
 }: {
-  options: { id: string; label: string; name?: string; closed?: boolean }[];
+  options: { id: string; label: string; name?: string; closed?: boolean; aligned?: boolean }[];
   selected: string[];
   onChange: (next: string[]) => void;
 }) {
@@ -36,6 +36,17 @@ export function StorePicker({
 
   function remove(id: string) {
     onChange(selected.filter((x) => x !== id));
+  }
+
+  // After a bulk add (Add all / Paste names), trim the assigned set down to
+  // aligned and/or active stores. Only stores we can see in the assigned list
+  // are judged — each button can be used on its own or one after the other.
+  const notAligned = assigned.filter((o) => o.aligned === false);
+  const notActive = assigned.filter((o) => o.closed === true);
+
+  function keepOnly(drop: { id: string }[]) {
+    const dropSet = new Set(drop.map((o) => o.id));
+    onChange(selected.filter((id) => !dropSet.has(id)));
   }
 
   function addAllFiltered() {
@@ -203,6 +214,13 @@ export function StorePicker({
               </button>
             )}
           </div>
+          {selected.length > 0 && (
+            <div className="mb-2 flex flex-wrap items-center gap-1.5">
+              <span className="text-xs text-muted-foreground">Keep only:</span>
+              <KeepOnlyButton label="Aligned stores" removing={notAligned.length} onClick={() => keepOnly(notAligned)} />
+              <KeepOnlyButton label="Active stores" removing={notActive.length} onClick={() => keepOnly(notActive)} />
+            </div>
+          )}
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <input
@@ -247,5 +265,20 @@ export function StorePicker({
         </div>
       </div>
     </div>
+  );
+}
+
+function KeepOnlyButton({ label, removing, onClick }: { label: string; removing: number; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={removing === 0}
+      title={removing === 0 ? "Everything assigned already matches" : `Removes ${removing} store${removing === 1 ? "" : "s"} that don't match`}
+      className="rounded-full border border-border bg-card px-2.5 py-0.5 text-xs font-medium text-foreground transition-colors hover:border-primary hover:text-primary disabled:cursor-default disabled:opacity-50 disabled:hover:border-border disabled:hover:text-foreground"
+    >
+      {label}
+      {removing > 0 && <span className="ml-1 text-muted-foreground">(−{removing})</span>}
+    </button>
   );
 }

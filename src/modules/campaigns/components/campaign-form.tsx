@@ -24,7 +24,7 @@ import type {
 import { createCampaign, updateCampaign } from "../actions";
 
 type Opt = { id: string; name: string };
-type StoreOpt = { id: string; label: string; name: string; closed: boolean };
+type StoreOpt = { id: string; label: string; name: string; closed: boolean; aligned: boolean };
 
 const selectClass =
   "w-full rounded-xl border border-transparent bg-input px-4 py-3 text-sm text-foreground focus:border-primary focus:bg-card focus:outline-none focus:ring-2 focus:ring-primary/30";

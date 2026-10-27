@@ -39,6 +39,7 @@ export default async function NewCampaignPage() {
         label: `${s.code} — ${s.name}`,
         name: s.name,
         closed: !isStoreActive(s, today),
+        aligned: s.aligned,
       }))}
       statuses={statuses}
       categories={categories}
