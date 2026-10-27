@@ -326,8 +326,14 @@ const STOCK_RE = /stock|out of stock|stockout|not available|unavailable|no suppl
  * free-text comments left on submitted photos. Service-role read, like the
  * rest of Export, so it covers every store. */
 export async function getRemarkRows(month: string): Promise<RemarkRow[]> {
-  const admin = createAdminClient();
   const { start, end } = monthRange(month);
+  return getRemarkRange(start, end);
+}
+
+/** Same as getRemarkRows but for any inclusive date range (YYYY-MM-DD) —
+ * tasks are matched on due date, photo comments on the day submitted. */
+export async function getRemarkRange(start: string, end: string): Promise<RemarkRow[]> {
+  const admin = createAdminClient();
 
   const [tasks, comments] = await Promise.all([
     fetchAllRows((from, to) =>

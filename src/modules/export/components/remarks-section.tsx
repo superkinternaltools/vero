@@ -1,40 +1,79 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Download } from "lucide-react";
 import { Button } from "@/core/ui/button";
+import { MultiSelect } from "@/core/ui/multi-select";
 import { cn } from "@/core/lib/utils";
+import { fetchRemarks } from "../actions";
 import { downloadCsv } from "./csv";
-import type { RemarkRow } from "../types";
+import type { CampaignOption, RemarkRow } from "../types";
 
 const PREVIEW_ROWS = 8;
 
+function monthBounds(month: string): { start: string; end: string } {
+  const [y, m] = month.split("-").map(Number);
+  return { start: `${month}-01`, end: new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10) };
+}
+
 /** What the field team flagged — "Can't do it" reasons and photo comments — as a
- * downloadable list, so stock gaps can be reviewed and pushed. */
-export function RemarksSection({ month, rows }: { month: string; rows: RemarkRow[] }) {
+ * downloadable list, so stock gaps can be reviewed and pushed. Starts on the
+ * page's month; changing the dates fetches that range. Has its own campaign
+ * filter, separate from the one at the top of the page. */
+export function RemarksSection({ month, initialRows, campaigns }: { month: string; initialRows: RemarkRow[]; campaigns: CampaignOption[] }) {
+  const bounds = monthBounds(month);
+  const [from, setFrom] = useState(bounds.start);
+  const [to, setTo] = useState(bounds.end);
+  const [rows, setRows] = useState(initialRows);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [campaignIds, setCampaignIds] = useState<string[]>([]);
   const [stockOnly, setStockOnly] = useState(false);
   const [remark, setRemark] = useState("");
 
+  // Only the latest request may update the list — dates can change while one is in flight.
+  const latest = useRef(0);
+
+  async function changeRange(nextFrom: string, nextTo: string) {
+    setFrom(nextFrom);
+    setTo(nextTo);
+    if (!nextFrom || !nextTo) return;
+    const id = ++latest.current;
+    setLoading(true);
+    setError(null);
+    const res = await fetchRemarks(nextFrom, nextTo);
+    if (id !== latest.current) return;
+    setLoading(false);
+    if (res.error) setError(res.error);
+    else {
+      setRows(res.rows ?? []);
+      setRemark("");
+    }
+  }
+
+  const campaignRows = useMemo(() => (campaignIds.length ? rows.filter((r) => campaignIds.includes(r.campaignId)) : rows), [rows, campaignIds]);
+
   const counts = useMemo(() => {
     const m = new Map<string, number>();
-    for (const r of rows) m.set(r.remark.toLowerCase(), (m.get(r.remark.toLowerCase()) ?? 0) + 1);
+    for (const r of campaignRows) m.set(r.remark.toLowerCase(), (m.get(r.remark.toLowerCase()) ?? 0) + 1);
     return m;
-  }, [rows]);
+  }, [campaignRows]);
 
   // Free-text comments are all different, so only offer the repeated reasons as filters.
   const reasonOptions = useMemo(() => {
     const seen = new Map<string, string>();
-    for (const r of rows) if (r.source === "Can't do it") seen.set(r.remark.toLowerCase(), r.remark);
+    for (const r of campaignRows) if (r.source === "Can't do it") seen.set(r.remark.toLowerCase(), r.remark);
     return [...seen.entries()].map(([k, label]) => ({ k, label, n: counts.get(k) ?? 0 })).sort((a, b) => b.n - a.n);
-  }, [rows, counts]);
+  }, [campaignRows, counts]);
 
-  const shown = rows.filter((r) => (!stockOnly || r.isStockIssue) && (!remark || r.remark.toLowerCase() === remark));
-  const stockCount = rows.filter((r) => r.isStockIssue).length;
+  // Campaign filter first, so the stock count and reason list follow it.
+  const shown = campaignRows.filter((r) => (!stockOnly || r.isStockIssue) && (!remark || r.remark.toLowerCase() === remark));
+  const stockCount = campaignRows.filter((r) => r.isStockIssue).length;
   const stores = new Set(shown.map((r) => r.storeCode)).size;
 
   function exportCsv() {
     downloadCsv(
-      `remarks-${month}${stockOnly ? "-stock" : ""}.csv`,
+      `remarks-${from}-to-${to}${stockOnly ? "-stock" : ""}.csv`,
       ["Date", "StoreCode", "StoreName", "Campaign", "Source", "Remark", "StockIssue", "ReportedBy"],
       shown.map((r) => [r.date, r.storeCode, r.storeName, r.campaignName, r.source, r.remark, r.isStockIssue ? "Yes" : "No", r.reportedBy]),
     );
@@ -48,7 +87,40 @@ export function RemarksSection({ month, rows }: { month: string; rows: RemarkRow
         and download the list to see where stock needs pushing.
       </p>
 
-      <div className="mt-4 flex flex-wrap items-center gap-2">
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div>
+          <label className="mb-1 block text-xs font-semibold text-muted-foreground">From</label>
+          <input
+            type="date"
+            value={from}
+            max={to || undefined}
+            onChange={(e) => changeRange(e.target.value, to)}
+            className="h-10 w-full rounded-xl border border-transparent bg-input px-2 text-sm text-foreground focus:border-primary focus:bg-background focus:outline-none"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-semibold text-muted-foreground">To</label>
+          <input
+            type="date"
+            value={to}
+            min={from || undefined}
+            onChange={(e) => changeRange(from, e.target.value)}
+            className="h-10 w-full rounded-xl border border-transparent bg-input px-2 text-sm text-foreground focus:border-primary focus:bg-background focus:outline-none"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-semibold text-muted-foreground">Campaigns</label>
+          <MultiSelect
+            options={campaigns.map((c) => ({ id: c.id, label: c.name }))}
+            selected={campaignIds}
+            onChange={setCampaignIds}
+            placeholder="All campaigns"
+          />
+        </div>
+      </div>
+      {error && <p className="mt-2 text-xs font-medium text-danger">{error}</p>}
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
         <button
           type="button"
           onClick={() => setStockOnly((v) => !v)}
@@ -71,7 +143,7 @@ export function RemarksSection({ month, rows }: { month: string; rows: RemarkRow
           ))}
         </select>
         <span className="ml-auto text-xs text-muted-foreground">
-          {shown.length} remark{shown.length === 1 ? "" : "s"} · {stores} store{stores === 1 ? "" : "s"}
+          {loading ? "Loading…" : `${shown.length} remark${shown.length === 1 ? "" : "s"} · ${stores} store${stores === 1 ? "" : "s"}`}
         </span>
       </div>
 
@@ -115,7 +187,7 @@ export function RemarksSection({ month, rows }: { month: string; rows: RemarkRow
           {shown.length > PREVIEW_ROWS ? `Showing ${PREVIEW_ROWS} of ${shown.length} — the CSV has all of them. ` : ""}
           For &quot;Can&apos;t do it&quot; rows, Vero doesn&apos;t record who tapped it, so it lists the store&apos;s SAE/ASM.
         </p>
-        <Button variant="outline" onClick={exportCsv} disabled={shown.length === 0}>
+        <Button variant="outline" onClick={exportCsv} disabled={loading || shown.length === 0}>
           <Download className="h-4 w-4" /> Export remarks CSV
         </Button>
       </div>

@@ -91,7 +91,6 @@ export function ExportClient({
   }, [campaigns, campaignIds, activeOnly, departmentIds]);
 
   const visibleRows = useMemo(() => rows.filter((r) => visibleCampaignIds.has(r.campaignId)), [rows, visibleCampaignIds]);
-  const visibleRemarks = useMemo(() => remarks.filter((r) => visibleCampaignIds.has(r.campaignId)), [remarks, visibleCampaignIds]);
   const visibleSplitRows = useMemo(() => splitRows.filter((r) => visibleCampaignIds.has(r.campaignId)), [splitRows, visibleCampaignIds]);
 
   const totalExpected = visibleRows.reduce((s, r) => s + r.expectedPayout, 0);
@@ -398,7 +397,7 @@ export function ExportClient({
         </div>
       </div>
 
-      <RemarksSection month={month} rows={visibleRemarks} />
+      <RemarksSection key={month} month={month} initialRows={remarks} campaigns={campaigns} />
 
       <PayoutSplitSection month={month} rows={visibleSplitRows} jobTitles={jobTitles} />
     </div>

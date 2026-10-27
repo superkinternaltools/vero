@@ -2,7 +2,8 @@
 
 import { createAdminClient } from "@/core/db/admin";
 import { requireAdmin } from "@/core/auth/session";
-import type { PhotoExportItem } from "./types";
+import { getRemarkRange } from "./queries";
+import type { PhotoExportItem, RemarkRow } from "./types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -136,4 +137,16 @@ export async function getPhotoManifest(
       a.photoIndex - b.photoIndex,
   );
   return { items };
+}
+
+/** Remarks for a custom date range — lets the Field remarks section be
+ * downloaded for any window, not just the page's month. */
+export async function fetchRemarks(from: string, to: string): Promise<{ rows?: RemarkRow[]; error?: string }> {
+  await requireAdmin();
+  const iso = /^\d{4}-\d{2}-\d{2}$/;
+  if (!iso.test(from) || !iso.test(to)) return { error: "Pick a valid start and end date." };
+  if (from > to) return { error: "The start date is after the end date." };
+  const days = (Date.parse(to) - Date.parse(from)) / 86_400_000;
+  if (days > 366) return { error: "One year at most per download." };
+  return { rows: await getRemarkRange(from, to) };
 }
