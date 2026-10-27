@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { redirect } from "next/navigation";
 import { createClient } from "@/core/db/server";
 
@@ -9,8 +10,10 @@ export type Profile = {
   is_admin: boolean;
 };
 
-/** Returns the current user's profile, or null if not signed in. */
-export async function getCurrentProfile(): Promise<Profile | null> {
+/** Returns the current user's profile, or null if not signed in. Memoized per
+ * request: the layout, the page guard and the page itself all ask for it, and
+ * each ask used to be its own auth + profile round trip. */
+export const getCurrentProfile = cache(async (): Promise<Profile | null> => {
   const supabase = await createClient();
   const {
     data: { user },
@@ -25,7 +28,7 @@ export async function getCurrentProfile(): Promise<Profile | null> {
 
   if (!profile || (profile as unknown as { deleted_at: string | null }).deleted_at) return null;
   return profile as Profile;
-}
+});
 
 /** Ensures the current user is an active admin, else redirects. Returns the profile. */
 export async function requireAdmin(): Promise<Profile> {

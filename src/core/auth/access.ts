@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { redirect } from "next/navigation";
 import { createClient } from "@/core/db/server";
 import { getCurrentProfile, type Profile } from "./session";
@@ -16,8 +17,10 @@ export type Access = {
 
 const ALL_KEYS = PERMISSION_KEYS.map((p) => p.key as string);
 
-/** Resolves the signed-in user's allowed modules + landing page. Null if not active. */
-export async function getAccess(): Promise<Access | null> {
+/** Resolves the signed-in user's allowed modules + landing page. Null if not
+ * active. Memoized per request — the layout and the page guard both call it,
+ * and each call is several database round trips. */
+export const getAccess = cache(async (): Promise<Access | null> => {
   const profile = await getCurrentProfile();
   if (!profile || profile.status !== "active") return null;
 
@@ -70,7 +73,7 @@ export async function getAccess(): Promise<Access | null> {
   const safeLanding = allowed.has(landingKey) ? `/${landingKey}` : "/dashboard";
 
   return { profile, allowed: [...allowed], landing: safeLanding, isAdmin: false };
-}
+});
 
 /** Page guard: redirects to login/pending, or to the user's landing if the module isn't allowed. */
 export async function requireAccess(key: string): Promise<Access> {
