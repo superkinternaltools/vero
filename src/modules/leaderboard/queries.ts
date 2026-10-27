@@ -6,6 +6,8 @@ export type StoreRank = {
   id: string;
   name: string;
   assigned: number;
+  /** Tasks marked "Can't do it" with a reason — kept in Assigned, but left out of the completion % so they don't count against anyone. */
+  cantDo: number;
   done: number;
   approved: number;
   completionPct: number;
@@ -16,6 +18,8 @@ export type JobTitleRank = {
   userId: string;
   name: string;
   assigned: number;
+  /** Tasks marked "Can't do it" with a reason — kept in Assigned, but left out of the completion % so they don't count against anyone. */
+  cantDo: number;
   done: number;
   approved: number;
   completionPct: number;
@@ -23,6 +27,9 @@ export type JobTitleRank = {
 };
 
 const pct = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 100) : 0);
+
+/** Completion is judged on tasks that could be done — a task marked "Can't do it" (stock not available, store closed, ...) is explained, not missed. */
+const completionPct = (done: number, assigned: number, cantDo: number) => pct(done, assigned - cantDo);
 
 /** Campaign IDs visible to this user: campaigns tagged with one of their
  * departments, plus any campaign with no department tagged at all (treated
@@ -139,8 +146,8 @@ export async function getJobTitleLeaderboard(params: {
     storeToUsers.set(us.store_id, arr);
   }
 
-  const userStats = new Map<string, { assigned: number; done: number; approved: number }>();
-  for (const uid of userMap.keys()) userStats.set(uid, { assigned: 0, done: 0, approved: 0 });
+  const userStats = new Map<string, { assigned: number; cantDo: number; done: number; approved: number }>();
+  for (const uid of userMap.keys()) userStats.set(uid, { assigned: 0, cantDo: 0, done: 0, approved: 0 });
 
   const allStoreIds = [...storeToUsers.keys()];
   if (allStoreIds.length > 0) {
@@ -161,6 +168,7 @@ export async function getJobTitleLeaderboard(params: {
         const s = userStats.get(uid);
         if (!s) continue;
         s.assigned += 1;
+        if (t.status === "not_done") s.cantDo += 1;
         if (["submitted", "approved", "rejected"].includes(t.status)) s.done += 1;
         if (t.status === "approved") s.approved += 1;
       }
@@ -174,9 +182,10 @@ export async function getJobTitleLeaderboard(params: {
         userId: uid,
         name,
         assigned: s.assigned,
+        cantDo: s.cantDo,
         done: s.done,
         approved: s.approved,
-        completionPct: pct(s.done, s.assigned),
+        completionPct: completionPct(s.done, s.assigned, s.cantDo),
         approvalPct: pct(s.approved, s.done),
       };
     })
@@ -197,10 +206,11 @@ export async function getStoreLeaderboard(params: {
   if (params.campaignIds.length > 0) q = q.in("campaign_id", params.campaignIds);
   const { data } = await q;
 
-  const map = new Map<string, { name: string; assigned: number; done: number; approved: number }>();
+  const map = new Map<string, { name: string; assigned: number; cantDo: number; done: number; approved: number }>();
   for (const t of (data as any[]) ?? []) {
-    const m = map.get(t.store_id) ?? { name: t.stores?.name ?? "—", assigned: 0, done: 0, approved: 0 };
+    const m = map.get(t.store_id) ?? { name: t.stores?.name ?? "—", assigned: 0, cantDo: 0, done: 0, approved: 0 };
     m.assigned += 1;
+    if (t.status === "not_done") m.cantDo += 1;
     if (["submitted", "approved", "rejected"].includes(t.status)) m.done += 1;
     if (t.status === "approved") m.approved += 1;
     map.set(t.store_id, m);
@@ -210,9 +220,10 @@ export async function getStoreLeaderboard(params: {
       id,
       name: m.name,
       assigned: m.assigned,
+      cantDo: m.cantDo,
       done: m.done,
       approved: m.approved,
-      completionPct: pct(m.done, m.assigned),
+      completionPct: completionPct(m.done, m.assigned, m.cantDo),
       approvalPct: pct(m.approved, m.done),
     }))
     .sort((a, b) => b.completionPct - a.completionPct || b.assigned - a.assigned);

@@ -45,7 +45,7 @@ const STATUS_META: Record<string, { label: string; cls: string }> = {
   submitted: { label: "Submitted",  cls: "bg-info/10 text-info" },
   pending:   { label: "Not done",   cls: "bg-muted text-muted-foreground" },
   missed:    { label: "Missed",     cls: "bg-muted text-muted-foreground" },
-  not_done:  { label: "Not done",   cls: "bg-muted text-muted-foreground" },
+  not_done:  { label: "Can't do",    cls: "bg-warning/10 text-warning" },
 };
 
 const DONE_STATUSES = new Set(["submitted", "approved", "rejected"]);
@@ -167,7 +167,8 @@ export function LeaderboardClient({
 
   const DETAIL_FILTERS = [
     { key: "all",      label: "All",      count: (taskDetails ?? []).length },
-    { key: "not_done", label: "Not done", count: pendingCount + notDoneCount },
+    { key: "not_done", label: "Not done", count: pendingCount },
+    { key: "cant_do",  label: "Can't do", count: notDoneCount },
     { key: "done",     label: "Done",     count: doneCount },
     { key: "missed",   label: "Missed",   count: missedCount },
   ];
@@ -175,7 +176,8 @@ export function LeaderboardClient({
   const visibleTasks = (taskDetails ?? []).filter((t) => {
     if (detailStatusFilter === "all") return true;
     if (detailStatusFilter === "done") return DONE_STATUSES.has(t.status);
-    if (detailStatusFilter === "not_done") return t.status === "pending" || t.status === "not_done";
+    if (detailStatusFilter === "not_done") return t.status === "pending";
+    if (detailStatusFilter === "cant_do") return t.status === "not_done";
     return t.status === detailStatusFilter;
   });
 
@@ -273,6 +275,7 @@ export function LeaderboardClient({
                   <th className="w-12 px-4 py-3 font-semibold">#</th>
                   <th className="px-4 py-3 font-semibold">Name</th>
                   <th className="px-4 py-3 font-semibold">Assigned</th>
+                  <th className="px-4 py-3 font-semibold" title="Marked 'Can't do it' — left out of Completion">Can&apos;t do</th>
                   <th className="px-4 py-3 font-semibold">Done</th>
                   <th className="min-w-40 px-4 py-3 font-semibold">Completion</th>
                   <th className="px-4 py-3 font-semibold">Approved</th>
@@ -289,6 +292,7 @@ export function LeaderboardClient({
                     <td className="px-4 py-3 text-center text-base">{medal(i)}</td>
                     <td className="px-4 py-3 font-medium text-foreground">{r.name}</td>
                     <td className="px-4 py-3 tabular-nums text-muted-foreground">{r.assigned}</td>
+                    <td className="px-4 py-3 tabular-nums text-muted-foreground">{r.cantDo}</td>
                     <td className="px-4 py-3 tabular-nums text-muted-foreground">{r.done}</td>
                     <td className="px-4 py-3"><ProgressBar value={r.completionPct} cls={pctCls(r.completionPct)} /></td>
                     <td className="px-4 py-3 tabular-nums text-muted-foreground">{r.approved}</td>
@@ -297,7 +301,7 @@ export function LeaderboardClient({
                 ))}
                 {filteredJtRows.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="p-10 text-center text-sm text-muted-foreground">
+                    <td colSpan={8} className="p-10 text-center text-sm text-muted-foreground">
                       {jtRows?.length === 0
                         ? `No ${selectedJobTitle?.name ?? "people"} with tasks in this period.`
                         : "No results match your search."}
@@ -325,6 +329,7 @@ export function LeaderboardClient({
                   <th className="w-12 px-4 py-3 font-semibold">#</th>
                   <th className="px-4 py-3 font-semibold">Store</th>
                   <th className="px-4 py-3 font-semibold">Assigned</th>
+                  <th className="px-4 py-3 font-semibold" title="Marked 'Can't do it' — left out of Completion">Can&apos;t do</th>
                   <th className="px-4 py-3 font-semibold">Done</th>
                   <th className="min-w-40 px-4 py-3 font-semibold">Completion</th>
                   <th className="px-4 py-3 font-semibold">Approved</th>
@@ -341,6 +346,7 @@ export function LeaderboardClient({
                     <td className="px-4 py-3 text-center text-base">{medal(i)}</td>
                     <td className="px-4 py-3 font-medium text-foreground">{s.name}</td>
                     <td className="px-4 py-3 tabular-nums text-muted-foreground">{s.assigned}</td>
+                    <td className="px-4 py-3 tabular-nums text-muted-foreground">{s.cantDo}</td>
                     <td className="px-4 py-3 tabular-nums text-muted-foreground">{s.done}</td>
                     <td className="px-4 py-3"><ProgressBar value={s.completionPct} cls={pctCls(s.completionPct)} /></td>
                     <td className="px-4 py-3 tabular-nums text-muted-foreground">{s.approved}</td>
@@ -349,7 +355,7 @@ export function LeaderboardClient({
                 ))}
                 {filteredStoreRows.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="p-10 text-center text-sm text-muted-foreground">
+                    <td colSpan={8} className="p-10 text-center text-sm text-muted-foreground">
                       No store data for this period.
                     </td>
                   </tr>
@@ -380,13 +386,14 @@ export function LeaderboardClient({
             </div>
 
             {/* Summary stats */}
-            <div className="grid grid-cols-5 gap-3 border-b border-border px-6 py-4">
+            <div className="grid grid-cols-3 gap-3 border-b border-border px-6 py-4 sm:grid-cols-6">
               {[
                 { label: "Assigned", value: selectedJtRow.assigned },
                 { label: "Done",     value: selectedJtRow.done },
                 { label: "Approved", value: approvedCount },
                 { label: "Missed",   value: missedCount },
-                { label: "Not done", value: pendingCount + notDoneCount },
+                { label: "Not done", value: pendingCount },
+                { label: "Can't do", value: notDoneCount },
               ].map((s) => (
                 <div key={s.label} className="rounded-xl bg-muted/50 p-3 text-center">
                   <p className="text-xl font-bold text-foreground">{detailPending ? "—" : s.value}</p>
@@ -584,9 +591,10 @@ export function LeaderboardClient({
                 <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Approval of done</p>
                 <ProgressBar value={selectedStoreRow.approvalPct} cls={pctCls(selectedStoreRow.approvalPct)} />
               </div>
-              <div className="grid grid-cols-3 gap-3 pt-2">
+              <div className="grid grid-cols-4 gap-3 pt-2">
                 {[
                   { label: "Assigned", value: selectedStoreRow.assigned },
+                  { label: "Can't do", value: selectedStoreRow.cantDo },
                   { label: "Done",     value: selectedStoreRow.done },
                   { label: "Approved", value: selectedStoreRow.approved },
                 ].map((stat) => (
