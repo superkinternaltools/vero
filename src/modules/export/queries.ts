@@ -1,7 +1,7 @@
 import { cache } from "react";
 import { createClient } from "@/core/db/server";
 import { createAdminClient } from "@/core/db/admin";
-import type { CampaignOption, DepartmentOption, ExportGroupRow, SubmitterPayoutRow } from "./types";
+import type { CampaignOption, DepartmentOption, ExportGroupRow, RemarkRow, SubmitterPayoutRow } from "./types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -317,5 +317,88 @@ export async function getExportGroups(month: string): Promise<ExportGroupRow[]> 
     (a, b) =>
       a.storeName.localeCompare(b.storeName) || a.week - b.week || a.campaignName.localeCompare(b.campaignName),
   );
+  return rows;
+}
+
+const STOCK_RE = /stock|out of stock|stockout|not available|unavailable|no supply|supply/i;
+
+/** Everything SAEs/ASMs flagged in a month: "Can't do it" reasons plus the
+ * free-text comments left on submitted photos. Service-role read, like the
+ * rest of Export, so it covers every store. */
+export async function getRemarkRows(month: string): Promise<RemarkRow[]> {
+  const admin = createAdminClient();
+  const { start, end } = monthRange(month);
+
+  const [tasks, comments] = await Promise.all([
+    fetchAllRows((from, to) =>
+      admin
+        .from("tasks")
+        .select("id, campaign_id, store_id, due_date, non_submission_reason, stores ( code, name ), campaigns ( name )")
+        .eq("status", "not_done")
+        .not("non_submission_reason", "is", null)
+        .gte("due_date", start)
+        .lte("due_date", end)
+        .order("id")
+        .range(from, to),
+    ),
+    fetchAllRows((from, to) =>
+      admin
+        .from("submissions")
+        .select("id, campaign_id, created_at, comments, stores ( code, name ), campaigns ( name ), profiles ( display_name, job_titles ( name ) )")
+        .not("comments", "is", null)
+        .neq("comments", "")
+        .gte("created_at", `${start}T00:00:00Z`)
+        .lte("created_at", `${end}T23:59:59Z`)
+        .order("id")
+        .range(from, to),
+    ),
+  ]);
+
+  // The app doesn't record who tapped "Can't do it", so show the store's
+  // SAE/ASM(s) instead — the people who'd have said it.
+  const storeIds = [...new Set(tasks.map((t) => t.store_id as string))];
+  const fieldByStore = new Map<string, string[]>();
+  for (let i = 0; i < storeIds.length; i += 150) {
+    const { data, error } = await admin
+      .from("user_stores")
+      .select("store_id, profiles ( display_name, job_titles ( name ) )")
+      .in("store_id", storeIds.slice(i, i + 150));
+    if (error) console.error("[export] remark owners lookup failed:", error);
+    for (const r of (data as any[]) ?? []) {
+      const title = r.profiles?.job_titles?.name;
+      if (title !== "SAE" && title !== "ASM") continue;
+      const list = fieldByStore.get(r.store_id) ?? [];
+      list.push(`${r.profiles.display_name} (${title})`);
+      fieldByStore.set(r.store_id, list);
+    }
+  }
+
+  const rows: RemarkRow[] = [
+    ...tasks.map((t): RemarkRow => ({
+      key: `t-${t.id}`,
+      source: "Can't do it",
+      campaignId: t.campaign_id,
+      campaignName: t.campaigns?.name ?? "—",
+      storeCode: t.stores?.code ?? "—",
+      storeName: t.stores?.name ?? "—",
+      date: t.due_date,
+      remark: t.non_submission_reason,
+      reportedBy: (fieldByStore.get(t.store_id) ?? []).join("; "),
+      isStockIssue: STOCK_RE.test(t.non_submission_reason),
+    })),
+    ...comments.map((c): RemarkRow => ({
+      key: `s-${c.id}`,
+      source: "Photo comment",
+      campaignId: c.campaign_id,
+      campaignName: c.campaigns?.name ?? "—",
+      storeCode: c.stores?.code ?? "—",
+      storeName: c.stores?.name ?? "—",
+      date: String(c.created_at).slice(0, 10),
+      remark: String(c.comments).trim(),
+      reportedBy: c.profiles ? `${c.profiles.display_name}${c.profiles.job_titles?.name ? ` (${c.profiles.job_titles.name})` : ""}` : "",
+      isStockIssue: STOCK_RE.test(String(c.comments)),
+    })),
+  ];
+  rows.sort((a, b) => a.storeName.localeCompare(b.storeName) || a.date.localeCompare(b.date));
   return rows;
 }

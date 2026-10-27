@@ -8,7 +8,8 @@ import { MultiSelect } from "@/core/ui/multi-select";
 import { getPhotoManifest } from "../actions";
 import { downloadCsv, money } from "./csv";
 import { PayoutSplitSection } from "./payout-split-section";
-import type { CampaignOption, DepartmentOption, ExportGroupRow, PhotoExportItem, SubmitterPayoutRow } from "../types";
+import { RemarksSection } from "./remarks-section";
+import type { CampaignOption, DepartmentOption, ExportGroupRow, PhotoExportItem, RemarkRow, SubmitterPayoutRow } from "../types";
 
 /** File System Access API — Chrome and Edge only, so it isn't in the TS lib
  * types. Only the bits used below are declared. */
@@ -49,6 +50,7 @@ export function ExportClient({
   jobTitles,
   rows,
   splitRows,
+  remarks,
 }: {
   month: string;
   campaigns: CampaignOption[];
@@ -56,6 +58,7 @@ export function ExportClient({
   jobTitles: string[];
   rows: ExportGroupRow[];
   splitRows: SubmitterPayoutRow[];
+  remarks: RemarkRow[];
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -88,6 +91,7 @@ export function ExportClient({
   }, [campaigns, campaignIds, activeOnly, departmentIds]);
 
   const visibleRows = useMemo(() => rows.filter((r) => visibleCampaignIds.has(r.campaignId)), [rows, visibleCampaignIds]);
+  const visibleRemarks = useMemo(() => remarks.filter((r) => visibleCampaignIds.has(r.campaignId)), [remarks, visibleCampaignIds]);
   const visibleSplitRows = useMemo(() => splitRows.filter((r) => visibleCampaignIds.has(r.campaignId)), [splitRows, visibleCampaignIds]);
 
   const totalExpected = visibleRows.reduce((s, r) => s + r.expectedPayout, 0);
@@ -393,6 +397,8 @@ export function ExportClient({
           </Button>
         </div>
       </div>
+
+      <RemarksSection month={month} rows={visibleRemarks} />
 
       <PayoutSplitSection month={month} rows={visibleSplitRows} jobTitles={jobTitles} />
     </div>

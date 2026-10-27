@@ -80,3 +80,21 @@ export type SubmitterPayoutRow = {
    * base an SAE/ASM share is taken from; 0 if payout isn't enabled. */
   baseAmount: number;
 };
+
+/** One remark the field team left — either a "Can't do it" reason on a task or
+ * a free-text comment on a submitted photo. Backs the "Remarks" export. */
+export type RemarkRow = {
+  key: string;
+  source: "Can't do it" | "Photo comment";
+  campaignId: string;
+  campaignName: string;
+  storeCode: string;
+  storeName: string;
+  /** Task due date, or the day the photo was submitted. */
+  date: string;
+  remark: string;
+  /** Photo comment: who wrote it. Can't do it: the SAE/ASM(s) linked to the
+   * store, since the app doesn't record who tapped it. */
+  reportedBy: string;
+  isStockIssue: boolean;
+};

@@ -5,6 +5,7 @@ import {
   listJobTitleOptions,
   getExportGroups,
   getSubmitterPayoutRows,
+  getRemarkRows,
 } from "@/modules/export/queries";
 import { ExportClient } from "@/modules/export/components/export-client";
 
@@ -22,12 +23,13 @@ export default async function ExportPage({
   const sp = await searchParams;
   const month = sp.month && /^\d{4}-\d{2}$/.test(sp.month) ? sp.month : currentMonth();
 
-  const [campaigns, departments, jobTitles, rows, splitRows] = await Promise.all([
+  const [campaigns, departments, jobTitles, rows, splitRows, remarks] = await Promise.all([
     listCampaignOptions(),
     listDepartmentOptions(),
     listJobTitleOptions(),
     getExportGroups(month),
     getSubmitterPayoutRows(month),
+    getRemarkRows(month),
   ]);
 
   return (
@@ -38,6 +40,7 @@ export default async function ExportPage({
       jobTitles={jobTitles}
       rows={rows}
       splitRows={splitRows}
+      remarks={remarks}
     />
   );
 }
